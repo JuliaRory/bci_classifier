@@ -95,12 +95,13 @@ config = {
 }
 
 project = "pr_Feedback_Quasi"
-sessions = ["04 Daniil 25.03.26"]
+sessions = ["Daniil"]
 
 if __name__ == "__main__":
     for session in sessions:
         folder_input = os.path.join(r"data", project, "raw", stage, session)
         records = os.listdir(folder_input)
+        records  =["02_calib_overt.hdf"]
 
         folder_output = os.path.join(r"data", project, "trans", stage, session)
         os.makedirs(folder_output, exist_ok=True)

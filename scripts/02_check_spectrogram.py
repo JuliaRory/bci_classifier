@@ -48,7 +48,7 @@ config = {
     "low_freq": 5, 
     "high_freq": 35,
     "baseline_ms": 500,
-    "trial_dur_ms": 4000, 
+    "trial_dur_ms": 8000, 
     "start_shift_ms": 1000, 
     "end_shift_ms": 0,
     "epoch_len_ms": None,
@@ -59,6 +59,9 @@ config = {
 project = "pr_Agency_EBCI"
 stage = "test"
 sessions = ["03_30 Artem"]
+
+project = "pr_Feedback_Quasi"
+sessions = ["Daniil"]
 
 if __name__ == "__main__":
     for session in sessions:

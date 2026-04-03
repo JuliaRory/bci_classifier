@@ -79,9 +79,6 @@ def process_record(full_path, folder_output, models, config):
         close()
 
 
-
-    
-
 def process_records(folder_input,  folder_models, records, folder_output, config):
     for record in records:
         print(f"Record {record}")
@@ -90,7 +87,7 @@ def process_records(folder_input,  folder_models, records, folder_output, config
         models = [os.path.join(folder_models, model) for model in models if model.find(rec) != -1]
         band  = record[record.find("_")+1:record.find("]")]
         
-        models = [os.path.join(folder_models, model) for model in models if model.find(band) != -1]
+        models = [model for model in models if model.find(band) != -1]
         # folder_output = os.path.join(folder_output, rec)
         # os.makedirs(folder_output, exist_ok=True)
         process_record(full_path=os.path.join(folder_input, record), folder_output=folder_output, models=models, config=config)

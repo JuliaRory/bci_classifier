@@ -43,12 +43,12 @@ def process_record(full_path, folder_output, config, config_csp):
     end_shift = epochs_1.shape[1] - end_shift
 
     for band in config_csp["bands"]:
-        epochs_1 = array([bandpass_filter(ep, fs=config["Fs"], low=band[0], high=band[1])[0] for ep in epochs_1])
-        epochs_2 = array([bandpass_filter(ep, fs=config["Fs"], low=band[0], high=band[1])[0] for ep in epochs_2])
+        epochs_1_band = array([bandpass_filter(ep, fs=config["Fs"], low=band[0], high=band[1])[0] for ep in epochs_1])
+        epochs_2_band = array([bandpass_filter(ep, fs=config["Fs"], low=band[0], high=band[1])[0] for ep in epochs_2])
 
         mask = lambda x: x[:, baseline+start_shift:end_shift, :]   # берём только главное для расчёта ковариаций
-        epochs_1_clean = mask(epochs_1)
-        epochs_2_clean = mask(epochs_2)
+        epochs_1_clean = mask(epochs_1_band)
+        epochs_2_clean = mask(epochs_2_band)
         print("Clean epochs shape: ", epochs_1_clean.shape, epochs_2_clean.shape)
 
         projForward, projInverse, evals = compute_csp(epochs_1_clean, epochs_2_clean, config_csp)
@@ -89,7 +89,7 @@ config = {
     "low_freq": 5, 
     "high_freq": 35,
     "baseline_ms": 500,
-    "trial_dur_ms": 4000, 
+    "trial_dur_ms": 8000, 
     "start_shift_ms": 1000, 
     "end_shift_ms": 0,
     "epoch_len_ms": None,
@@ -99,22 +99,26 @@ config = {
 }
 
 config_csp = {
-    "bands": [[7, 10], [8, 12], [9, 13], [10, 14]],
+    "bands": [[9, 13], [10, 14]],
     "robust": True,
     "concat": True,
     "regularization": True,
-    "alpha": 0.05,
+    "alpha": 0.1,
 }
 
 project = "pr_Agency_EBCI"
 stage = "test"
 sessions = ["03_30 Artem"]
 
+project = "pr_Feedback_Quasi"
+sessions = ["Daniil"]
+
 if __name__ == "__main__":
     for session in sessions:
         folder_input = os.path.join(r"data", project, "trans", stage, session)
         records = os.listdir(folder_input)
-        records = [record for record in records if record.find("calib") != -1]
+        records = [record for record in records if record.find("_calib") != -1]
+        # records  =["02_calib_overt.hdf"]
 
         folder_output = os.path.join(r"data", project, "features", "csp", stage, session)
         os.makedirs(folder_output, exist_ok=True)
