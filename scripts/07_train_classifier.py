@@ -12,7 +12,7 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from src.utils.montage_processing import get_channel_names
 
 from src.analysis.evaluate_spatial_patterns import score_spatial_patterns_physio, calculate_eigenscore
-
+from scipy.signal import butter
 
 EEG_CHANNELS = arange(64)
 bad_channels = ["FT9", "TP9", "T7", "AF7", "AF8", "FT10", "TP10", "T8"]
@@ -45,10 +45,13 @@ def save_classifier(folder, folder_output, classifier, sel_comp, info):
     b_lda = classifier.intercept_[0]
     band = info[:info.find("_")]
     print(band)
+    sos_basic = butter(4, [5, 35], btype="bandpass", output='sos', fs=1000)
+    sos = butter(4, [10, 14], btype="bandpass", output='sos', fs=1000)
+
     classifier_data = {
         'spatialW': projForward[:, sel_comp].tolist(),  # веса csp фильтра
-        # 'sos_basic': sos_basic.tolist(),  # коэффициенты SOS фильтра [секции × 6]
-        # 'sos': sos_band.tolist(),  # коэффициенты SOS фильтра [секции × 6]
+        'sos_basic': sos_basic.tolist(),  # коэффициенты SOS фильтра [секции × 6]
+        'sos': sos.tolist(),  # коэффициенты SOS фильтра [секции × 6]
         'features_type': "csp",  # тип признаков
 
         # LDA веса
@@ -98,11 +101,11 @@ def process_records(folder_input, records, folder_output, config):
 
 project = "pr_Agency_EBCI"
 stage = "test"
-sessions = ["03_30 Artem"]
+sessions = ["04_03 Artem"]
 
 config = {
-    "sel_comps": [0, 1, -1, -2],
-    "n_feat": [2, 3, 4], 
+    "sel_comps": [0, 1, -1],
+    "n_feat": [3], 
     "classifier": "lda"
 }
 if __name__ == "__main__":

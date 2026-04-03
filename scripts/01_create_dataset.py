@@ -77,31 +77,31 @@ config = {
 
 stage = "test"
 project = "pr_Agency_EBCI"
-sessions = ["03_30 Artem"]
+sessions = ["04_03 Artem"]
 
 
-config = {
-    "Fs": 1000,
-    "do_filtering": True, 
-    "low_freq": 5, 
-    "high_freq": 35,
-    "baseline_ms": 500,
-    "trial_dur_ms": 6000,   # 4000
-    "start_shift_ms": 0,    # 1000
-    "end_shift_ms": 0,
-    "epoch_len_ms": None,
-    "epochs_step_ms": None, 
-    "idxs_keys": "1-2" # "2-3"
-}
+# config = {
+#     "Fs": 1000,
+#     "do_filtering": True, 
+#     "low_freq": 5, 
+#     "high_freq": 35,
+#     "baseline_ms": 500,
+#     "trial_dur_ms": 6000,   # 4000
+#     "start_shift_ms": 0,    # 1000
+#     "end_shift_ms": 0,
+#     "epoch_len_ms": None,
+#     "epochs_step_ms": None, 
+#     "idxs_keys": "1-2" # "2-3"
+# }
 
-project = "pr_Feedback_Quasi"
-sessions = ["Daniil"]
+# project = "pr_Feedback_Quasi"
+# sessions = ["Daniil"]
 
 if __name__ == "__main__":
     for session in sessions:
         folder_input = os.path.join(r"data", project, "raw", stage, session)
         records = os.listdir(folder_input)
-        records  =["02_calib_overt.hdf"]
+        records  =["04_calib.hdf"]
 
         folder_output = os.path.join(r"data", project, "trans", stage, session)
         os.makedirs(folder_output, exist_ok=True)

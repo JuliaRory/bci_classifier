@@ -95,11 +95,11 @@ def process_records(folder_input,  folder_models, records, folder_output, config
 
 project = "pr_Agency_EBCI"
 stage = "test"
-sessions = ["03_30 Artem"]
+sessions = ["04_03 Artem"]
 
 config = {
-    "sel_comps": [0, 1, 2, -1, -2, -3],
-    "n_feat": [2, 3, 4], 
+    "sel_comps": [0, 1],
+    "n_feat": [2], 
     "classifier": "lda"
 }
 if __name__ == "__main__":

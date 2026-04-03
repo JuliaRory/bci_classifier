@@ -89,7 +89,7 @@ config = {
     "low_freq": 5, 
     "high_freq": 35,
     "baseline_ms": 500,
-    "trial_dur_ms": 8000, 
+    "trial_dur_ms": 4000, 
     "start_shift_ms": 1000, 
     "end_shift_ms": 0,
     "epoch_len_ms": None,
@@ -99,26 +99,25 @@ config = {
 }
 
 config_csp = {
-    "bands": [[9, 13], [10, 14]],
+    "bands": [[8, 12], [9, 13], [10, 14], [8, 15]],
     "robust": True,
     "concat": True,
     "regularization": True,
-    "alpha": 0.1,
+    "alpha": 0.01,
 }
 
 project = "pr_Agency_EBCI"
 stage = "test"
-sessions = ["03_30 Artem"]
+sessions = ["04_03 Artem"]
 
-project = "pr_Feedback_Quasi"
-sessions = ["Daniil"]
+# project = "pr_Feedback_Quasi"
+# sessions = ["Daniil"]
 
 if __name__ == "__main__":
     for session in sessions:
         folder_input = os.path.join(r"data", project, "trans", stage, session)
         records = os.listdir(folder_input)
-        records = [record for record in records if record.find("_calib") != -1]
-        # records  =["02_calib_overt.hdf"]
+        records = [record for record in records if record.find("04_calib") != -1]
 
         folder_output = os.path.join(r"data", project, "features", "csp", stage, session)
         os.makedirs(folder_output, exist_ok=True)

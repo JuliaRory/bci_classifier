@@ -71,7 +71,7 @@ def process_records(folder_input, records, folder_output, config):
 
 project = "pr_Agency_EBCI"
 stage = "test"
-sessions = ["03_30 Artem"]
+sessions = ["04_03 Artem"]
 
 config = {
     "sel_comps": "std"
