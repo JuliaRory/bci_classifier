@@ -73,7 +73,8 @@ def process_record(full_path, folder_output, config, config_csp):
         folder = os.path.join("results", parts[1], parts[3], parts[4], "CSP_components")
         filename = parts[-1]
         os.makedirs(folder, exist_ok=True)
-        output_filename = os.path.join(folder, f"{band}_{rob}_{con}+reg{config_csp["alpha"]}_"+filename[len("EPOCHS")+1:-4]+".png")
+        reg = f"reg{config_csp["alpha"]}_" if config_csp["regularization"] else ""
+        output_filename = os.path.join(folder, f"{band}_{rob}_{con}+_{reg}"+filename[len("EPOCHS")+1:-4]+".png")
         plot_10_comp(evals, projInverse, band, output_filename, config_csp)
 
 
@@ -110,14 +111,14 @@ project = "pr_Agency_EBCI"
 stage = "test"
 sessions = ["04_03 Artem"]
 
-project = "pr_Feedback_Quasi"
-sessions = ["Julia"]
+# project = "pr_Feedback_Quasi"
+# sessions = ["Julia"]
 
 if __name__ == "__main__":
     for session in sessions:
         folder_input = os.path.join(r"data", project, "trans", stage, session)
         records = os.listdir(folder_input)
-        records = [record for record in records if record.find("02 calib QM fix") != -1]
+        # records = [record for record in records if record.find("02 calib QM fix") != -1]
 
         folder_output = os.path.join(r"data", project, "features", "csp", stage, session)
         os.makedirs(folder_output, exist_ok=True)

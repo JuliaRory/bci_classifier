@@ -92,5 +92,5 @@ def score_spatial_patterns_physio(
 
 
 def calculate_eigenscore(evals):
-    eig_score = np.abs(np.log(evals / (1 - evals ) + 1e-10))
+    eig_score = np.abs(np.log(evals / (1 - evals) + 1e-10))
     return np.round(eig_score, 3)

@@ -27,3 +27,18 @@ def get_topo_positions(fl_montage):
 def get_good_channels(fl_montage, radius=0.54):
     df = pd.read_csv(fl_montage, sep='\t')
     return df.loc[df.radius <= radius]["labels"].values
+
+import json
+def get_weights(labels, idxs, filename):
+    with open(filename, 'r', encoding='utf-8') as file:
+        data = json.load(file)
+    label_empty = [label for label in labels if not label in data.keys()]
+    for label in label_empty:
+        data[label] = 0
+
+    labels_good = labels[idxs]
+
+    sorted_data_labels = {key: data[key] for key in labels if key in data and key in labels_good}
+    sorted_data_idxs = {key: data[labels[key]] for key in idxs if labels[key] in data}
+    
+    return sorted_data_idxs, sorted_data_labels
