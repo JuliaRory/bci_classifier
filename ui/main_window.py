@@ -442,6 +442,10 @@ class MainWindow(QMainWindow):
         s = self.settings
         return os.path.join(r"results", s.project, s.stage, s.session, "CSP_components")
 
+    def _folder_csp_plots_clear(self):
+        s = self.settings
+        return os.path.join(r"results", s.project, s.stage, s.session, "CSP_components_clear")
+
     def _folder_selected_component_plots(self):
         s = self.settings
         return os.path.join(r"results", s.project, s.stage, s.session, "selected_components")
@@ -1392,6 +1396,29 @@ class MainWindow(QMainWindow):
 
         return plots
 
+    def _find_csp_component_plots_clear(self, band=None, record_stem=None):
+        folder_plots = Path(self._folder_csp_plots_clear())
+        if not folder_plots.exists():
+            return []
+
+        stems = [record_stem] if record_stem else self._selected_record_stems()
+        plots = []
+        if stems:
+            for stem in stems:
+                plots.extend(sorted(folder_plots.glob(f"*{stem}.png")))
+        else:
+            plots = sorted(folder_plots.glob("*.png"))
+
+        if band is not None:
+            band_variants = self._band_text_variants(band)
+            plots = [
+                plot
+                for plot in plots
+                if any(plot.name.startswith(f"{band_text}_") for band_text in band_variants)
+            ]
+
+        return plots
+
     def _save_current_best_components_plot(self):
         row = self._read_best_pair_row()
         if row is None:
@@ -1415,6 +1442,17 @@ class MainWindow(QMainWindow):
 
     def _open_csp_component_plot(self, band=None, record_stem=None):
         plots = self._find_csp_component_plots(band, record_stem=record_stem)
+        if not plots:
+            QMessageBox.warning(self, "CSP компоненты", "Графики CSP для выбранных данных не найдены.")
+            return
+
+        try:
+            os.startfile(str(plots[0]))
+        except AttributeError:
+            subprocess.Popen(["xdg-open", str(plots[0])])
+
+    def _open_csp_component_plot_clear(self, band=None, record_stem=None):
+        plots = self._find_csp_component_plots_clear(band, record_stem=record_stem)
         if not plots:
             QMessageBox.warning(self, "CSP компоненты", "Графики CSP для выбранных данных не найдены.")
             return
@@ -1452,13 +1490,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка диапазона CSP", "Заполните частотный диапазон.")
             return
 
-        if not Path(self._folder_csp_plots()).exists():
+        if not Path(self._folder_csp_plots_clear()).exists():
             QMessageBox.warning(self, "CSP компоненты", "Папка с графиками CSP пока не найдена.")
             return
 
         row = self._read_best_pair_row()
         record_stem = self._record_stem_from_row(row)
-        self._open_csp_component_plot([low, high], record_stem=record_stem)
+        self._open_csp_component_plot_clear([low, high], record_stem=record_stem)
     
     def on_train_classifier(self):
         """Обучение классификатора"""

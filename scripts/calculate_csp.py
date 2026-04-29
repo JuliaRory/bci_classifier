@@ -23,7 +23,13 @@ EEG_CHANNELS = array([find_ch_idx(ch, r"./resources/mks64_standard.ced") for ch 
 xy = get_topo_positions("resources/mks64_standard.ced")[EEG_CHANNELS]
 
 def plot_10_comp(evals, projForward, band, output_filename, config, component_scores):
-    fig = plot_10_csp_components(abs(evals), projForward, xy, component_scores=component_scores)
+    fig = plot_10_csp_components(
+        abs(evals),
+        projForward,
+        xy,
+        component_scores=component_scores,
+        same_vlim=config.get("same_vlim", True),
+    )
     
     robust = "robust" if config["robust"] else "standard"
     reg = "reg"+str(config["alpha"]) if config["regularization"] else ""
@@ -88,7 +94,8 @@ def process_record(full_path, folder_output, config, config_csp):
         component_scores = build_component_assessment(projInverse, evals)
 
         parts = Path(full_path).parts
-        folder = os.path.join("results", parts[1], parts[3], parts[4], "CSP_components")
+        plot_folder_name = "CSP_components_clear" if config_csp.get("same_vlim", True) else "CSP_components"
+        folder = os.path.join("results", parts[1], parts[3], parts[4], plot_folder_name)
         os.makedirs(folder, exist_ok=True)
         reg = f"reg{config_csp['alpha']}_" if config_csp["regularization"] else ""
         output_filename = os.path.join(folder, f"{band}_{rob}_{con}+_{reg}" + source_filename[len("EPOCHS") + 1 : -4] + ".png")

@@ -31,6 +31,7 @@ config_csp = {
     "concat": True,
     "regularization": False,
     "alpha": 0.1,
+    "same_vlim": True,
 }
 
 project = "pr_Feedback_Quasi"
