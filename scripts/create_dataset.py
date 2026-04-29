@@ -17,7 +17,8 @@ def process_record(full_path, folder_output, config):
     start_shift = ms_to_samples(config["start_shift_ms"])
     end_shift = ms_to_samples(config["end_shift_ms"])
 
-    eeg, idxs_1, idxs_2, idxs_3 = process_file_resonance(full_path, baseline=baseline, end_shift=end_shift, show_plot=False)
+    eeg, idxs_1, idxs_2, idxs_3 = process_file_resonance(full_path, baseline=baseline, end_shift=end_shift, show_plot=True)
+    print(idxs_1.shape, idxs_2.shape, idxs_3.shape)
     
     if config["do_filtering"]:
         eeg, _ = bandpass_filter(eeg, config["Fs"], low=config["low_freq"], high=config["high_freq"])
