@@ -97,6 +97,45 @@ def count_any_transitions(arr, event_code=1):
     prev = arr[:-1]
     curr = arr[1:]
     return int(sum((prev != event_code) & (curr == event_code)))
+
+
+def count_short_switches(arr, max_width, min_width=1, on_value=1):
+    """
+    Count short ``0 -> 1 -> 0`` pulses in a discrete signal.
+
+    Parameters
+    ----------
+    arr : array-like
+        Input binary-like signal.
+    max_width : int
+        Maximum pulse width in samples to count as a short switch.
+    min_width : int, default=1
+        Minimum pulse width in samples to include.
+    on_value : int, default=1
+        Active pulse value. Everything else is treated as the off state.
+
+    Returns
+    -------
+    int
+        Number of pulses whose width is in ``[min_width, max_width]``.
+    """
+    arr = asarray(arr)
+    if arr.size == 0:
+        return 0
+    if min_width < 1:
+        raise ValueError("min_width must be >= 1")
+    if max_width < min_width:
+        raise ValueError("max_width must be >= min_width")
+
+    is_on = (arr == on_value).astype(int)
+    starts = diff(is_on, prepend=0) == 1
+    ends = diff(is_on, append=0) == -1
+
+    start_idxs = starts.nonzero()[0]
+    end_idxs = ends.nonzero()[0] + 1
+    widths = end_idxs - start_idxs
+
+    return int(sum((widths >= min_width) & (widths <= max_width)))
     
 
 def find_intervals(arr, value):

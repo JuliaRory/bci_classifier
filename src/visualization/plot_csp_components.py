@@ -56,7 +56,7 @@ def plot_eigenvalues(eigvals, ax):
                 print(e)
 
         
-def plot_10_csp_components(eigenvals, projForward, xy):
+def plot_10_csp_components(eigenvals, projForward, xy, component_scores=None):
         fig = plt.figure(figsize=(22, 6))
         n = 6
         gs = gridspec.GridSpec(2, n, height_ratios=[1, 1], width_ratios=[2]+[1]*(n-1), wspace=0.05)
@@ -64,13 +64,21 @@ def plot_10_csp_components(eigenvals, projForward, xy):
         plot_eigenvalues(eigenvals, plt.subplot(gs[:, 0]))
 
         idxs = [0, 1, 2, 3, 4, -5, -4, -3, -2, -1]
-        titles = [0, 1, 2, 3, 4] + [len(projForward)+idx for idx in idxs[::-1]]
+        n_components = projForward.shape[1]
+        titles = [idx if idx >= 0 else n_components + idx for idx in idxs]
         vmin, vmax = np.min(projForward[:, idxs]), np.max(projForward[:, idxs])
         vmin, vmax = -max(abs(vmin), abs(vmax)), max(abs(vmin), abs(vmax))
         for i, ch in enumerate(idxs):
                 ax = plt.subplot(gs[int(ch<0), abs(ch)+1*int(ch>=0)])
                 im, _ = plot_topomap(projForward[:, ch], xy, size=5, axes=ax, show=False, contours=0, sphere=0.6, cmap=newcmp, extrapolate='head') #, names=ch_labels)
-                ax.set_title(f'# {titles[i]}')
+                title = f'# {titles[i]}'
+                if component_scores is not None:
+                        title = (
+                                f"{title}\n"
+                                f"contra {component_scores['final_score_contra'][i]:.2f}\n"
+                                f"ipsi {component_scores['final_score_ipsi'][i]:.2f}"
+                        )
+                ax.set_title(title)
 
         cbar = fig.colorbar(im, ax=fig.axes)
         cbar.set_ticks([vmin, vmax])

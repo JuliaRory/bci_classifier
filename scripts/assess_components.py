@@ -2,34 +2,20 @@
 import os
 import json
 from pathlib import Path
-import copy
-import pandas as pd
 from h5py import File
-from numpy import array, where, arange, argsort
+from numpy import arange
 
-
-from src.utils.montage_processing import get_channel_names, find_ch_idx, get_weights
-
-from src.analysis.evaluate_spatial_patterns import score_spatial_patterns_physio, calculate_eigenscore
+from src.analysis.csp_component_scores import (
+    build_component_assessment_table,
+    save_component_assessment_table,
+)
+from src.utils.montage_processing import get_channel_names
 
 
 EEG_CHANNELS = arange(64)
 bad_channels = ["FT9", "TP9", "T7", "AF7", "AF8", "FT10", "TP10", "T8"]
 labels = get_channel_names(r"./resources/mks64_standard.ced")
 labels_good =  [ch for ch in labels if not(ch in bad_channels)]        # labels
-EEG_CHANNELS = array([find_ch_idx(ch, r"./resources/mks64_standard.ced") for ch in labels if not(ch in bad_channels)])
-
-weights_idx, weights_labels = get_weights(labels, EEG_CHANNELS, r"./resources/pattern_weights.json")
-weights_idx_contra, weights_labels_contra = get_weights(labels, EEG_CHANNELS, r"./resources/pattern_weights_contra.json")
-weights_idx_ipsi, weights_labels_ipsi = get_weights(labels, EEG_CHANNELS, r"./resources/pattern_weights_ipsi.json")
-
-def calculate_weighted_score(patterns, weights):
-    """
-    patterns [n_components, n_channels]
-    weights dict {ch_idx: weight}
-    """
-    w = array([weights[key] for key in weights.keys()])
-    return patterns @ w
 
 
 def process_record(full_path, folder_output, config):
@@ -38,69 +24,16 @@ def process_record(full_path, folder_output, config):
         evals = h5f["evals"][:]
         metadata_csp = h5f['metadata_csp'][()]
 
-    ch_len = projInverse.shape[0]
-    sel_comp = [0, 1, 2, 3, 4, ch_len-5, ch_len-4, ch_len-3, ch_len-2, ch_len-1]
-
-    projInverse = projInverse.T                 # (n_components, n_channels)
-    patterns = abs(projInverse[sel_comp, :])
-
-    score = calculate_weighted_score(patterns, weights_idx)
-    score_contra = calculate_weighted_score(patterns, weights_idx_contra)
-    score_ipsi = calculate_weighted_score(patterns, weights_idx_ipsi)
-    
-    eigscore1 = calculate_eigenscore(evals[sel_comp])
-    eigscore = abs(evals[sel_comp]-0.5)
-
-    
-    # scores = score_spatial_patterns_physio(
-    #     patterns=projInverse[sel_comp, :],
-    #     ch_names=EEG_CHANNELS, 
-    #     roi_channels=["FC1", "FC3", "FC5", "C1", "C3", "C5", "CP1", "CP3", "CP5"]
-    # )
-    
     metadata_csp = json.loads(metadata_csp)
     filename = Path(full_path).parts[-1]
-    reg_alpha = f"reg{metadata_csp["alpha"]}"
-    record = filename[filename.find(reg_alpha)+len(reg_alpha) + 1: ]
-    
-    results = {
-        "session": Path(full_path).parts[-2],
-        "record": record
-    }
-    for key in metadata_csp.keys():
-        if key == "bands":
-            continue
-        results[key] = metadata_csp[key]
-    
-    scores = {
-        "n_comp": sel_comp, 
-         "evals": evals[sel_comp],
-         "eigscore": eigscore,
-         "eigscore1": eigscore1,
-         "score": score,
-         "final_score": score * eigscore1, 
-         "score_contra": score_contra,
-         "final_score_contra": score_contra * eigscore1, 
-         "score_ipsi": score_ipsi,
-         "final_score_ipsi": score_ipsi * eigscore1, 
-    }
-
-    df_results = []
-    for i, comp in enumerate(sel_comp):
-        res = results.copy()
-        # res["comp"] = comp
-        # res["evals"] = round(evals[sel_comp[i]], 3)
-        # res['escore'] = eigscore[sel_comp[i]]
-        for metric in scores.keys():
-            res[metric] = round(scores[metric][i], 3)
-        df_results.append(res)
-
-    df_results = pd.DataFrame(df_results)
-    df_results["band"] = df_results["band"].apply(json.dumps)
-
-    filename = filename[len("MATRIX_"):]
-    output_filename = os.path.join(folder_output, "DATAFRAME_"+filename[:-4]+".xlsx")
-    df_results.to_excel(output_filename, index=False)
+    df_results = build_component_assessment_table(
+        proj_inverse=projInverse,
+        evals=evals,
+        metadata_csp=metadata_csp,
+        session=Path(full_path).parts[-2],
+        filename=filename,
+    )
+    save_component_assessment_table(df_results, folder_output, filename)
 
 
 def process_records_assessment(folder_input, records, folder_output, config):

@@ -34,6 +34,7 @@ class SettingsHandler:
     # CSP
     def update_cov_type(self, text):
         self.settings.CSP.covariance_type = text
+        self.settings.CSP.robust_cov = True if text == "ohcov" else False
     
     def update_regul(self):
         self.settings.CSP.use_regularization = self.ui.checkbox_regul.isChecked()

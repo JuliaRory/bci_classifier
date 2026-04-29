@@ -25,7 +25,7 @@ class CSPSettings:
     alpha_reg: float = 0.01
 
     average_cov: bool = False 
-    freq_bands: List[object] = field(default_factory=lambda: [(8.0, 12.0), (13.0, 30.0)])
+    freq_bands: List[object] = field(default_factory=lambda: [(8.0, 12.0), (9, 13), (10, 14), (8, 15)])
 
 
 @dataclass
@@ -40,8 +40,8 @@ class Settings:
     freq_bands: List[object] = field(default_factory=lambda: [(8.0, 12.0), (13.0, 30.0)])
 
     folder_data: str = r"data"
-    project: str = "pr_Agency_EBCI"
-    stage: str = "test"
+    project: str = "pr_AstroSync"
+    stage: str = "exp"
     session: str = "04_03 Artem"
 
     CSP: CSPSettings = field(default_factory=CSPSettings)

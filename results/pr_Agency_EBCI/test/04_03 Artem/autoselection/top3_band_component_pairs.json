@@ -1,0 +1,29 @@
+[
+  {
+    "band": "[8, 12]",
+    "components": [
+      0,
+      -1
+    ],
+    "balanced accuracy": 0.7666666666666666,
+    "brier score": 0.2116655899356478
+  },
+  {
+    "band": "[9, 13]",
+    "components": [
+      0,
+      -1
+    ],
+    "balanced accuracy": 0.7000000000000001,
+    "brier score": 0.289146580757113
+  },
+  {
+    "band": "[8, 15]",
+    "components": [
+      0,
+      -1
+    ],
+    "balanced accuracy": 0.6666666666666666,
+    "brier score": 0.255565956963587
+  }
+]

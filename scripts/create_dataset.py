@@ -60,7 +60,6 @@ def process_records(folder_input, records, folder_output, config):
         print(f"Record {record}")
         process_record(full_path=os.path.join(folder_input, record), folder_output=folder_output, config=config)
 
-
 config = {
     "Fs": 1000,
     "do_filtering": True, 
