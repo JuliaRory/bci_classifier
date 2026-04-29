@@ -11,6 +11,7 @@ from matplotlib import colormaps as cm
 from matplotlib.figure import Figure
 from matplotlib.colors import ListedColormap
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.pyplot import close
 from mne.viz import plot_topomap
 from PyQt5.QtWidgets import (
     QMainWindow, QApplication, QWidget, QVBoxLayout, QHBoxLayout,
@@ -21,6 +22,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.metrics import brier_score_loss
 
 
 from settings.settings import Settings
@@ -29,7 +32,10 @@ from settings.settings_handler import SettingsHandler
 from src.utils.ui_helpers import *
 from src.utils.layout_utils import create_hbox, create_vbox
 from src.utils.montage_processing import find_ch_idx, get_channel_names, get_topo_positions
+from src.analysis.features import get_csp_features
+from src.analysis.preprocessing import bandpass_filter
 from src.analysis.csp_component_scores import get_selected_component_indices
+from src.visualization.ROC_curve import plot_proba
 
 from scripts.create_dataset import process_records
 
@@ -143,7 +149,7 @@ class MainWindow(QMainWindow):
             self.add_band_input(8.0, 12.0)
         
         self.button_calculate_csp = create_button("Рассчитать CSP")
-        self.button_show_csp_plot = create_button("Просмотр CSP компонентов")
+        self.button_show_csp_plot = create_button("построить вероятности")
 
     def widgets_results(self):
         self.components_table = self._create_results_table()
@@ -395,6 +401,7 @@ class MainWindow(QMainWindow):
             return
 
         self.settings.session = session
+        self.pair_scores_table.clearSelection()
         print("FOLDER SELECTED", session)
 
         self._current_folder = os.path.join(
@@ -438,6 +445,10 @@ class MainWindow(QMainWindow):
         s = self.settings
         return os.path.join(r"results", s.project, s.stage, s.session, "selected_components")
 
+    def _folder_probability_plots(self):
+        s = self.settings
+        return os.path.join(r"results", s.project, s.stage, s.session, "PROBA_selected")
+
     def _folder_cv_scores(self):
         s = self.settings
         return os.path.join(r"results", s.project, s.stage, s.session, "cv_scores")
@@ -462,6 +473,26 @@ class MainWindow(QMainWindow):
         if row is None or "record" not in row.index:
             return None
         return Path(str(row["record"])).stem
+
+    def _find_epochs_dataset_path(self, row=None):
+        folder_epochs = Path(self._current_dataset_folder)
+        if not folder_epochs.exists():
+            return None
+
+        record_stem = self._record_stem_from_row(row)
+        if record_stem:
+            candidate = folder_epochs / f"EPOCHS_{record_stem}.hdf"
+            if candidate.exists():
+                return candidate
+
+        selected_records = self._selected_dataset_records()
+        if selected_records:
+            candidate = folder_epochs / selected_records[0]
+            if candidate.exists():
+                return candidate
+
+        matches = sorted(folder_epochs.glob("EPOCHS_*.hdf"))
+        return matches[0] if matches else None
 
     def _topomap_positions(self):
         labels = get_channel_names(MONTAGE_PATH)
@@ -782,7 +813,7 @@ class MainWindow(QMainWindow):
                 ranking_score_text = f"{float(row['ranking_score']):.3f}"
             lines.append(
                 f"{idx}. Band {row['band']} Hz. "
-                f"- {self._row_components(row)}. "
+                f"{self._row_components(row)}"
                 f"Comps: {component_assessment_text}. "
                 f"Bal acc: {float(row['balanced accuracy']):.3f}. "
                 f"Brier score: {float(row['brier score']):.3f}. "
@@ -834,6 +865,63 @@ class MainWindow(QMainWindow):
             ]
 
         return sorted(candidates)[0] if candidates else None
+
+    def _build_probability_features(self, epochs, spatial_filters, band, components):
+        config = self._build_preprocess_config()
+        epochs_band = np.array(
+            [
+                bandpass_filter(epoch, fs=config["Fs"], low=band[0], high=band[1])[0]
+                for epoch in epochs
+            ]
+        )
+        epochs_csp = np.array([epoch @ spatial_filters[:, components] for epoch in epochs_band])
+        return get_csp_features(epochs_csp)
+
+    def _save_probability_plot_for_row(self, row):
+        if row is None:
+            raise ValueError("Нет выбранной пары band-components.")
+
+        band = self._coerce_band_value(row["band"])
+        components = self._coerce_components_value(self._row_components(row))
+        if band is None or not components:
+            raise ValueError("Не удалось прочитать band/components для построения вероятностей.")
+
+        dataset_path = self._find_epochs_dataset_path(row)
+        if dataset_path is None or not dataset_path.exists():
+            raise FileNotFoundError("Не найден EPOCHS-файл для выбранной записи.")
+
+        record_stem = self._record_stem_from_row(row) or dataset_path.stem[len("EPOCHS_") :]
+        matrix_path = self._find_csp_matrix(band, record_stem=record_stem)
+        if matrix_path is None:
+            raise FileNotFoundError(f"Не найдена CSP matrix для band {band} и record {record_stem}.")
+
+        with File(dataset_path, "r") as h5f:
+            epochs = h5f["epochs"][:]
+            labels = h5f["labels"][:].squeeze().astype(int)
+
+        with File(matrix_path, "r") as h5f:
+            spatial_filters = h5f["projForward"][:]
+
+        features = self._build_probability_features(epochs, spatial_filters, band, components)
+        classifier = LDA()
+        classifier.fit(features, labels)
+        y_proba = classifier.predict_proba(features)[:, 1]
+        brier = brier_score_loss(labels, y_proba)
+
+        fig = plot_proba(labels, y_proba)
+        fig.suptitle(
+            f"{self.settings.session}. {record_stem}. Band {band}. Components {tuple(components)}. "
+            f"Brier score = {brier:.3f}"
+        )
+
+        band_text = str([int(x) if float(x).is_integer() else x for x in band])
+        components_text = "_".join(str(component) for component in components)
+        folder_output = Path(self._folder_probability_plots())
+        folder_output.mkdir(parents=True, exist_ok=True)
+        output_path = folder_output / f"{band_text}_{components_text}_{record_stem}.png"
+        fig.savefig(output_path, dpi=300, bbox_inches="tight")
+        close(fig)
+        return output_path
 
     def _draw_empty_best_components_plot(self, message):
         self.best_components_figure.clear()
@@ -976,6 +1064,8 @@ class MainWindow(QMainWindow):
         table.resizeRowsToContents()
 
     def refresh_csp_results(self):
+        self.pair_scores_table.blockSignals(True)
+        self.pair_scores_table.clearSelection()
         try:
             df_components = self._read_component_tables()
         except Exception as exc:
@@ -1003,6 +1093,7 @@ class MainWindow(QMainWindow):
             self.best_pair_label.setText(self._read_best_pair_text())
             self._update_best_components_plot()
             self._show_dataframe(self.pair_scores_table, self._pair_scores_view_df, max_rows=1000)
+            self.pair_scores_table.blockSignals(False)
             return
 
         try:
@@ -1015,11 +1106,13 @@ class MainWindow(QMainWindow):
             self._draw_empty_best_components_plot("No component plot selected.")
             self._pair_scores_view_df = pd.DataFrame()
             self._show_dataframe(self.pair_scores_table, pd.DataFrame())
+            self.pair_scores_table.blockSignals(False)
             return
 
         self.best_pair_label.setText(best_pair_text)
         self._update_best_components_plot()
         self._show_dataframe(self.pair_scores_table, self._pair_scores_view_df, max_rows=1000)
+        self.pair_scores_table.blockSignals(False)
 
     def on_pair_score_selected(self):
         self._update_best_components_plot()
@@ -1323,9 +1416,15 @@ class MainWindow(QMainWindow):
             subprocess.Popen(["xdg-open", str(plots[0])])
 
     def on_show_csp_components_plot(self):
-        output_path = self._save_current_best_components_plot()
-        if output_path is None or not output_path.exists():
-            QMessageBox.warning(self, "CSP компоненты", "Нет выбранной пары компонентов для просмотра.")
+        row = self._read_best_pair_row()
+        if row is None:
+            QMessageBox.warning(self, "Вероятности", "Нет выбранной пары компонентов для построения вероятностей.")
+            return
+
+        try:
+            output_path = self._save_probability_plot_for_row(row)
+        except Exception as exc:
+            QMessageBox.warning(self, "Вероятности", str(exc))
             return
 
         try:
@@ -1363,4 +1462,3 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Показ компонентов...")
         # Здесь ваша логика отображения компонентов
         print("Показ компонентов")
-
