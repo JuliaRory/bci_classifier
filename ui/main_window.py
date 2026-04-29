@@ -148,7 +148,7 @@ class MainWindow(QMainWindow):
     def widgets_results(self):
         self.components_table = self._create_results_table()
         self.pair_scores_table = self._create_results_table()
-        self.best_pair_label = QLabel("Subject -. Record -. Band -. Components -. Component assessment score: -. Balanced accuracy: -. Brier score: -.")
+        self.best_pair_label = QLabel("Subject -. Record -. Band -. Components -. Component assessment score: -. Balanced accuracy: -. Brier score: -. Ranking score: -.")
         self.best_pair_label.setWordWrap(True)
         self.best_pair_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.best_components_figure = Figure(figsize=(5.8, 3.4), dpi=100)
@@ -574,6 +574,8 @@ class MainWindow(QMainWindow):
         if df_best.empty:
             return None
 
+        df_best = self._ensure_ranking_score(df_best)
+
         stems = set(self._selected_record_stems())
         if stems and "record" in df_best.columns:
             df_best = df_best[
@@ -583,11 +585,15 @@ class MainWindow(QMainWindow):
         if df_best.empty:
             return None
 
-        sort_columns = ["balanced accuracy", "brier score"]
-        ascending = [False, True]
-        if "component_assessment_score" in df_best.columns:
+        if "ranking_score" in df_best.columns:
+            sort_columns = ["ranking_score"]
+            ascending = [False]
+        elif "component_assessment_score" in df_best.columns:
             sort_columns = ["component_assessment_score", "balanced accuracy", "brier score"]
             ascending = [False, False, True]
+        else:
+            sort_columns = ["balanced accuracy", "brier score"]
+            ascending = [False, True]
 
         df_best = df_best.sort_values(
             sort_columns,
@@ -608,7 +614,10 @@ class MainWindow(QMainWindow):
         if df_cv.empty or not required_columns.issubset(df_cv.columns):
             return None
 
-        if "component_assessment_score" in df_cv.columns:
+        if "ranking_score" in df_cv.columns:
+            sort_columns = ["ranking_score"]
+            ascending = [False]
+        elif "component_assessment_score" in df_cv.columns:
             sort_columns = ["component_assessment_score", "balanced accuracy", "brier score"]
             ascending = [False, False, True]
         else:
@@ -633,6 +642,8 @@ class MainWindow(QMainWindow):
         if df_best.empty:
             return pd.DataFrame()
 
+        df_best = self._ensure_ranking_score(df_best)
+
         stems = set(self._selected_record_stems())
         if stems and "record" in df_best.columns:
             df_best = df_best[
@@ -642,11 +653,15 @@ class MainWindow(QMainWindow):
         if df_best.empty:
             return pd.DataFrame()
 
-        sort_columns = ["balanced accuracy", "brier score"]
-        ascending = [False, True]
-        if "component_assessment_score" in df_best.columns:
+        if "ranking_score" in df_best.columns:
+            sort_columns = ["ranking_score"]
+            ascending = [False]
+        elif "component_assessment_score" in df_best.columns:
             sort_columns = ["component_assessment_score", "balanced accuracy", "brier score"]
             ascending = [False, False, True]
+        else:
+            sort_columns = ["balanced accuracy", "brier score"]
+            ascending = [False, True]
 
         df_best = df_best.sort_values(
             sort_columns,
@@ -675,7 +690,10 @@ class MainWindow(QMainWindow):
         if df_cv.empty or not required_columns.issubset(df_cv.columns):
             return pd.DataFrame()
 
-        if "component_assessment_score" in df_cv.columns:
+        if "ranking_score" in df_cv.columns:
+            sort_columns = ["ranking_score"]
+            ascending = [False]
+        elif "component_assessment_score" in df_cv.columns:
             sort_columns = ["component_assessment_score", "balanced accuracy", "brier score"]
             ascending = [False, False, True]
         else:
@@ -689,7 +707,7 @@ class MainWindow(QMainWindow):
 
     def _attach_component_assessment_scores(self, df_cv):
         if df_cv.empty or "component_assessment_score" in df_cv.columns:
-            return df_cv
+            return self._ensure_ranking_score(df_cv.copy())
 
         df_components = self._read_component_tables()
         if df_components.empty:
@@ -708,11 +726,25 @@ class MainWindow(QMainWindow):
                 lambda value: str(tuple(ast.literal_eval(value))) if isinstance(value, str) else str(tuple(value))
             )
 
-        return df_cv.merge(
+        df_cv = df_cv.merge(
             df_groups[["band", "sel_comp", "component_assessment_score"]],
             on=["band", "sel_comp"],
             how="left",
         )
+        if "component_assessment_score" in df_cv.columns and "brier score" in df_cv.columns:
+            df_cv["ranking_score"] = df_cv["component_assessment_score"] * (2 - df_cv["brier score"])
+        return df_cv
+
+    def _ensure_ranking_score(self, df):
+        if df is None or df.empty:
+            return df
+        if "ranking_score" not in df.columns and {"component_assessment_score", "brier score"}.issubset(df.columns):
+            df = df.copy()
+            df["ranking_score"] = (
+                pd.to_numeric(df["component_assessment_score"], errors="coerce")
+                * (2 - pd.to_numeric(df["brier score"], errors="coerce"))
+            )
+        return df
 
     def _read_selected_pair_row_from_table(self):
         if self._pair_scores_view_df is None or self._pair_scores_view_df.empty:
@@ -736,7 +768,7 @@ class MainWindow(QMainWindow):
         if df_top.empty:
             df_top = self._read_top_pair_rows_from_all_results(top_n=3)
         if df_top.empty:
-            return "Subject -. Record -. Band -. Components -. Component assessment score: -. Balanced accuracy: -. Brier score: -."
+            return "Subject -. Record -. Band -. Components -. Component assessment score: -. Balanced accuracy: -. Brier score: -. Ranking score: -."
 
         subject = df_top.iloc[0]["session"] if "session" in df_top.columns else "-"
         record = df_top.iloc[0]["record"] if "record" in df_top.columns else "-"
@@ -745,12 +777,16 @@ class MainWindow(QMainWindow):
             component_assessment_text = "-"
             if "component_assessment_score" in row.index and pd.notna(row["component_assessment_score"]):
                 component_assessment_text = f"{float(row['component_assessment_score']):.3f}"
+            ranking_score_text = "-"
+            if "ranking_score" in row.index and pd.notna(row["ranking_score"]):
+                ranking_score_text = f"{float(row['ranking_score']):.3f}"
             lines.append(
-                f"{idx}. Band {row['band']}. "
-                f"Components: {self._row_components(row)}. "
-                f"Component assessment score: {component_assessment_text}. "
-                f"Balanced accuracy: {float(row['balanced accuracy']):.3f}. "
-                f"Brier score: {float(row['brier score']):.3f}."
+                f"{idx}. Band {row['band']} Hz. "
+                f"- {self._row_components(row)}. "
+                f"Comps: {component_assessment_text}. "
+                f"Bal acc: {float(row['balanced accuracy']):.3f}. "
+                f"Brier score: {float(row['brier score']):.3f}. "
+                f"FINAL: {ranking_score_text}. "
             )
         return f"Subject {subject}. Record {record}.\n" + "\n".join(lines)
 
@@ -975,7 +1011,7 @@ class MainWindow(QMainWindow):
             best_pair_text = self._read_best_pair_text()
         except Exception as exc:
             print(f"Не удалось загрузить cross-validation scores: {exc}")
-            self.best_pair_label.setText("Subject -. Record -. Band -. Components -. Component assessment score: -. Balanced accuracy: -. Brier score: -.")
+            self.best_pair_label.setText("Subject -. Record -. Band -. Components -. Component assessment score: -. Balanced accuracy: -. Brier score: -. Ranking score: -.")
             self._draw_empty_best_components_plot("No component plot selected.")
             self._pair_scores_view_df = pd.DataFrame()
             self._show_dataframe(self.pair_scores_table, pd.DataFrame())

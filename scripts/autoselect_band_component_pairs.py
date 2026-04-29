@@ -73,16 +73,16 @@ def score_component_groups(df_components):
             except IndexError:
                 continue
 
-                rows.append(
-                    {
-                        "band": band,
-                        "sel_comp": str(components),
-                        "components": list(components),
-                        "absolute_components": [int(df_band["n_comp"].iloc[component]) for component in components],
-                        "component_assessment_score": float(np.sum(scores)),
-                        "component_score_method": final_score_col,
-                    }
-                )
+            rows.append(
+                {
+                    "band": band,
+                    "sel_comp": str(components),
+                    "components": list(components),
+                    "absolute_components": [int(df_band["n_comp"].iloc[component]) for component in components],
+                    "component_assessment_score": float(np.sum(scores)),
+                    "component_score_method": final_score_col,
+                }
+            )
 
     return pd.DataFrame(rows).sort_values(
         ["band", "component_assessment_score"],
@@ -124,10 +124,11 @@ def summarize_cv_scores(cv_scores_path, selected_pairs):
         )
     )
     summary["components"] = summary["sel_comp"].apply(lambda value: list(parse_tuple(value)))
+    summary["ranking_score"] = summary["component_assessment_score"] * (2 - summary["brier score"])
 
     return summary.sort_values(
-        ["component_assessment_score", "balanced accuracy", "brier score"],
-        ascending=[False, False, True],
+        ["ranking_score"],
+        ascending=[False],
         ignore_index=True,
     )
 
@@ -150,7 +151,7 @@ def save_outputs(df_component_groups, df_selected_pairs, df_cv_summary, folder_o
     top3_json_path = os.path.join(folder_output, "top3_band_component_pairs.json")
 
     top3 = df_cv_summary.head(3).copy()
-    top3_view = top3[["band", "components", "balanced accuracy", "brier score"]]
+    top3_view = top3[["band", "components", "component_assessment_score", "balanced accuracy", "brier score", "ranking_score"]]
 
     with pd.ExcelWriter(all_results_path) as writer:
         df_component_groups.to_excel(writer, sheet_name="component_group_scores", index=False)
@@ -188,12 +189,13 @@ def autoselect_record(full_path, folder_csp, folder_output, config, config_csp, 
     df_cv_summary = summarize_cv_scores(cv_scores_path, df_selected_pairs)
     output_paths = save_outputs(df_component_groups, df_selected_pairs, df_cv_summary, folder_output)
 
-    top3_view = df_cv_summary.head(3)[["band", "components", "balanced accuracy", "brier score"]]
-    print("\nTop-3 [band]-[components]-[balanced accuracy]-[brier-score]")
+    top3_view = df_cv_summary.head(3)[["band", "components", "component_assessment_score", "balanced accuracy", "brier score", "ranking_score"]]
+    print("\nTop-3 [band]-[components]-[component-assessment]-[balanced accuracy]-[brier-score]-[ranking-score]")
     for _, row in top3_view.iterrows():
         print(
             f"{row['band']}-{row['components']}-"
-            f"{row['balanced accuracy']:.3f}-{row['brier score']:.3f}"
+            f"{row['component_assessment_score']:.3f}-"
+            f"{row['balanced accuracy']:.3f}-{row['brier score']:.3f}-{row['ranking_score']:.3f}"
         )
     print("\noutput files:")
     for path in output_paths:
