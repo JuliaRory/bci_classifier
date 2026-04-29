@@ -9,7 +9,7 @@ import numpy as np
 from mne.viz import plot_topomap
 
 viridisBig = cm.get_cmap('jet')
-newcmp = ListedColormap(viridisBig(np.linspace(0, 1, 15)))
+newcmp = "jet" #ListedColormap(viridisBig(np.linspace(0, 1, 15)))
 
 # топографические карты
 def plot_topoplot(X, positions, vmin=None, vmax=None, ch_labels=None, axes=None):
@@ -70,7 +70,18 @@ def plot_10_csp_components(eigenvals, projForward, xy, component_scores=None):
         vmin, vmax = -max(abs(vmin), abs(vmax)), max(abs(vmin), abs(vmax))
         for i, ch in enumerate(idxs):
                 ax = plt.subplot(gs[int(ch<0), abs(ch)+1*int(ch>=0)])
-                im, _ = plot_topomap(projForward[:, ch], xy, size=5, axes=ax, show=False, contours=0, sphere=0.6, cmap=newcmp, extrapolate='head') #, names=ch_labels)
+                im, _ = plot_topomap(
+                        projForward[:, ch],
+                        xy,
+                        size=5,
+                        axes=ax,
+                        show=False,
+                        contours=0,
+                        sphere=0.6,
+                        cmap=newcmp,
+                        extrapolate='head',
+                        vlim=(vmin, vmax),
+                ) #, names=ch_labels)
                 title = f'# {titles[i]}'
                 if component_scores is not None:
                         title = (

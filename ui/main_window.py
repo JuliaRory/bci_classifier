@@ -48,7 +48,7 @@ COMPONENT_GROUP_TEMPLATES = [
 BAD_CHANNELS = ["FT9", "TP9", "T7", "AF7", "AF8", "FT10", "TP10", "T8"]
 MONTAGE_PATH = r"resources/mks64_standard.ced"
 VIRIDIS_BIG = cm.get_cmap("jet")
-CSP_COLORMAP = ListedColormap(VIRIDIS_BIG(np.linspace(0, 1, 15)))
+CSP_COLORMAP = "jet" #ListedColormap(VIRIDIS_BIG(np.linspace(0, 1, 15)))
 
 class MainWindow(QMainWindow):
     """Главное окно приложения"""
@@ -64,6 +64,7 @@ class MainWindow(QMainWindow):
         self._current_records = []   # Выбранный файл
         self._current_folder = None   # Выбранная папка
         self._pair_scores_view_df = pd.DataFrame()
+        self._pair_scores_best_df = pd.DataFrame()
         
         # Вызов методов структуры
         self.init_state()
@@ -538,6 +539,40 @@ class MainWindow(QMainWindow):
         df_scores = pd.concat([pd.read_excel(file) for file in files], ignore_index=True)
         return self._average_cv_scores_across_folds(df_scores)
 
+    def _sort_pair_scores(self, df):
+        if df is None or df.empty:
+            return df
+
+        if "ranking_score" in df.columns:
+            sort_columns = ["ranking_score"]
+            ascending = [False]
+        elif "component_assessment_score" in df.columns:
+            sort_columns = ["component_assessment_score", "balanced accuracy", "brier score"]
+            ascending = [False, False, True]
+        else:
+            sort_columns = ["balanced accuracy", "brier score"]
+            ascending = [False, True]
+
+        return df.sort_values(sort_columns, ascending=ascending, ignore_index=True)
+
+    def _prepare_pair_scores_view_df(self):
+        df_cv = self._read_cv_scores()
+        if df_cv.empty:
+            return pd.DataFrame()
+
+        df_cv = self._attach_component_assessment_scores(df_cv)
+        if "pipeline" in df_cv.columns:
+            df_cv = df_cv[df_cv["pipeline"] == "split_before_csp"].copy()
+
+        if df_cv.empty:
+            return pd.DataFrame()
+
+        if "components" not in df_cv.columns and "sel_comp" in df_cv.columns:
+            df_cv = df_cv.copy()
+            df_cv["components"] = df_cv["sel_comp"]
+
+        return df_cv.reset_index(drop=True)
+
     def _average_cv_scores_across_folds(self, df_scores):
         if df_scores.empty or "fold" not in df_scores.columns:
             return df_scores
@@ -565,6 +600,12 @@ class MainWindow(QMainWindow):
     def _read_best_pair_row(self):
         row = self._read_selected_pair_row_from_table()
         if row is not None:
+            return row
+
+        if self._pair_scores_best_df is not None and not self._pair_scores_best_df.empty:
+            row = self._pair_scores_best_df.iloc[0].copy()
+            if "components" not in row.index and "sel_comp" in row.index:
+                row["components"] = row["sel_comp"]
             return row
 
         row = self._read_best_pair_row_from_all_results()
@@ -634,28 +675,9 @@ class MainWindow(QMainWindow):
         return df_best.iloc[0]
 
     def _read_best_pair_row_from_cv_scores(self):
-        df_cv = self._read_cv_scores()
+        df_cv = self._sort_pair_scores(self._prepare_pair_scores_view_df())
         if df_cv.empty:
             return None
-
-        if "pipeline" in df_cv.columns:
-            df_cv = df_cv[df_cv["pipeline"] == "split_before_csp"].copy()
-
-        required_columns = {"band", "sel_comp", "balanced accuracy", "brier score"}
-        if df_cv.empty or not required_columns.issubset(df_cv.columns):
-            return None
-
-        if "ranking_score" in df_cv.columns:
-            sort_columns = ["ranking_score"]
-            ascending = [False]
-        elif "component_assessment_score" in df_cv.columns:
-            sort_columns = ["component_assessment_score", "balanced accuracy", "brier score"]
-            ascending = [False, False, True]
-        else:
-            sort_columns = ["balanced accuracy", "brier score"]
-            ascending = [False, True]
-
-        df_cv = df_cv.sort_values(sort_columns, ascending=ascending, ignore_index=True)
         row = df_cv.iloc[0].copy()
         row["components"] = row["sel_comp"]
         return row
@@ -706,32 +728,16 @@ class MainWindow(QMainWindow):
         return df_best
 
     def _read_top_pair_rows_from_cv_scores(self, top_n=3):
-        df_cv = self._pair_scores_view_df.copy() if self._pair_scores_view_df is not None else pd.DataFrame()
+        df_cv = self._pair_scores_best_df.copy() if self._pair_scores_best_df is not None else pd.DataFrame()
         if df_cv.empty:
-            df_cv = self._read_cv_scores()
+            df_cv = self._sort_pair_scores(self._prepare_pair_scores_view_df())
         if df_cv.empty:
             return pd.DataFrame()
-
-        df_cv = self._attach_component_assessment_scores(df_cv)
-
-        if "pipeline" in df_cv.columns:
-            df_cv = df_cv[df_cv["pipeline"] == "split_before_csp"].copy()
 
         required_columns = {"band", "sel_comp", "balanced accuracy", "brier score"}
         if df_cv.empty or not required_columns.issubset(df_cv.columns):
             return pd.DataFrame()
-
-        if "ranking_score" in df_cv.columns:
-            sort_columns = ["ranking_score"]
-            ascending = [False]
-        elif "component_assessment_score" in df_cv.columns:
-            sort_columns = ["component_assessment_score", "balanced accuracy", "brier score"]
-            ascending = [False, False, True]
-        else:
-            sort_columns = ["balanced accuracy", "brier score"]
-            ascending = [False, True]
-
-        df_cv = df_cv.sort_values(sort_columns, ascending=ascending, ignore_index=True).head(top_n).copy()
+        df_cv = df_cv.head(top_n).copy()
         if "components" not in df_cv.columns:
             df_cv["components"] = df_cv["sel_comp"]
         return df_cv
@@ -813,7 +819,7 @@ class MainWindow(QMainWindow):
                 ranking_score_text = f"{float(row['ranking_score']):.3f}"
             lines.append(
                 f"{idx}. Band {row['band']} Hz. "
-                f"{self._row_components(row)}"
+                f"{self._row_components(row)} "
                 f"Comps: {component_assessment_text}. "
                 f"Bal acc: {float(row['balanced accuracy']):.3f}. "
                 f"Brier score: {float(row['brier score']):.3f}. "
@@ -1006,6 +1012,7 @@ class MainWindow(QMainWindow):
                 show=False,
                 contours=0,
                 sphere=0.6,
+                image_interp='cubic',
                 extrapolate="head",
                 cmap=CSP_COLORMAP,
                 vlim=vlim,
@@ -1089,7 +1096,8 @@ class MainWindow(QMainWindow):
         )
 
         if df_components.empty:
-            self._pair_scores_view_df = self._read_cv_scores().head(1000).copy()
+            self._pair_scores_view_df = self._prepare_pair_scores_view_df().head(1000).copy()
+            self._pair_scores_best_df = self._sort_pair_scores(self._pair_scores_view_df.copy())
             self.best_pair_label.setText(self._read_best_pair_text())
             self._update_best_components_plot()
             self._show_dataframe(self.pair_scores_table, self._pair_scores_view_df, max_rows=1000)
@@ -1097,14 +1105,15 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            df_cv_scores = self._read_cv_scores()
-            self._pair_scores_view_df = df_cv_scores.head(1000).copy()
+            self._pair_scores_view_df = self._prepare_pair_scores_view_df().head(1000).copy()
+            self._pair_scores_best_df = self._sort_pair_scores(self._pair_scores_view_df.copy())
             best_pair_text = self._read_best_pair_text()
         except Exception as exc:
             print(f"Не удалось загрузить cross-validation scores: {exc}")
             self.best_pair_label.setText("Subject -. Record -. Band -. Components -. Component assessment score: -. Balanced accuracy: -. Brier score: -. Ranking score: -.")
             self._draw_empty_best_components_plot("No component plot selected.")
             self._pair_scores_view_df = pd.DataFrame()
+            self._pair_scores_best_df = pd.DataFrame()
             self._show_dataframe(self.pair_scores_table, pd.DataFrame())
             self.pair_scores_table.blockSignals(False)
             return
