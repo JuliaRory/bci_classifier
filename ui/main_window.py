@@ -1017,6 +1017,7 @@ class MainWindow(QMainWindow):
             raise FileNotFoundError("Не найден EPOCHS-файл для выбранной записи.")
 
         record_stem = self._record_stem_from_row(row) or dataset_path.stem[len("EPOCHS_") :]
+        print("record_stem", record_stem)
         matrix_path = self._find_csp_matrix(band, record_stem=record_stem)
         if matrix_path is None:
             raise FileNotFoundError(f"Не найдена CSP matrix для band {band} и record {record_stem}.")
