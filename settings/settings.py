@@ -43,6 +43,7 @@ class Settings:
     project: str = "pr_AstroSync"
     stage: str = "exp"
     session: str = "04_03 Artem"
+    classifier_output_path_template: str = r"models/{project}/{stage}/{session}/feat{components}_{band}_{record_stem}.json"
 
     CSP: CSPSettings = field(default_factory=CSPSettings)
     preprocess: PreprocessingSettings = field(default_factory=PreprocessingSettings)
