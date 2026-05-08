@@ -1278,8 +1278,8 @@ class MainWindow(QMainWindow):
         )
 
         if df_components.empty:
-            self._pair_scores_best_df = self._sort_pair_scores(self._prepare_pair_scores_view_df())
-            self._pair_scores_view_df = self._pair_scores_best_df.head(1000).copy()
+            self._pair_scores_view_df = self._prepare_pair_scores_view_df().head(1000).copy()
+            self._pair_scores_best_df = self._sort_pair_scores(self._pair_scores_view_df.copy())
             self.best_pair_label.setText(self._read_best_pair_text())
             self._update_best_components_plot()
             self._show_dataframe(self.pair_scores_table, self._pair_scores_view_df, max_rows=1000)
@@ -1289,8 +1289,8 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            self._pair_scores_best_df = self._sort_pair_scores(self._prepare_pair_scores_view_df())
-            self._pair_scores_view_df = self._pair_scores_best_df.head(1000).copy()
+            self._pair_scores_view_df = self._prepare_pair_scores_view_df().head(1000).copy()
+            self._pair_scores_best_df = self._sort_pair_scores(self._pair_scores_view_df.copy())
             best_pair_text = self._read_best_pair_text()
         except Exception as exc:
             print(f"Не удалось загрузить cross-validation scores: {exc}")
@@ -1313,9 +1313,26 @@ class MainWindow(QMainWindow):
     def _select_best_pair_row(self):
         if self._pair_scores_view_df is None or self._pair_scores_view_df.empty:
             return
+        if self._pair_scores_best_df is None or self._pair_scores_best_df.empty:
+            return
         if self.pair_scores_table.rowCount() == 0:
             return
-        self.pair_scores_table.selectRow(0)
+
+        best_row = self._pair_scores_best_df.iloc[0]
+        match_columns = [
+            column
+            for column in ["session", "record", "classifier", "band", "pipeline", "sel_comp"]
+            if column in self._pair_scores_view_df.columns and column in best_row.index
+        ]
+        if not match_columns:
+            return
+
+        for row_index, (_, row) in enumerate(self._pair_scores_view_df.iterrows()):
+            if row_index >= self.pair_scores_table.rowCount():
+                break
+            if all(str(row[column]) == str(best_row[column]) for column in match_columns):
+                self.pair_scores_table.selectRow(row_index)
+                return
 
     def on_dataset_selection_changed(self):
         self.refresh_csp_results()
