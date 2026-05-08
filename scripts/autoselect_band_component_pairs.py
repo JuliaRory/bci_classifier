@@ -23,6 +23,8 @@ COMPONENT_GROUP_TEMPLATES = [
 
 COMPONENT_SCORE_ALIASES = {
     "final": ["final_score"],
+    "contra": ["final_score_contra"],
+    "ipsi": ["final_score_ipsi"],
 }
 
 
@@ -32,14 +34,6 @@ def parse_tuple(value):
     if isinstance(value, list):
         return tuple(value)
     return tuple(ast.literal_eval(value))
-
-
-def normalize_series(series):
-    series = pd.to_numeric(series, errors="coerce")
-    span = series.max() - series.min()
-    if pd.isna(span) or span == 0:
-        return pd.Series(np.ones(len(series)), index=series.index)
-    return (series - series.min()) / span
 
 
 def find_score_column(df, aliases):
@@ -59,12 +53,25 @@ def read_component_assessment_tables(folder_csp, record_stem):
 
 
 def score_component_groups(df_components):
-    final_score_col = find_score_column(df_components, COMPONENT_SCORE_ALIASES["final"])
+    contra_score_col = None
+    ipsi_score_col = None
+    try:
+        contra_score_col = find_score_column(df_components, COMPONENT_SCORE_ALIASES["contra"])
+        ipsi_score_col = find_score_column(df_components, COMPONENT_SCORE_ALIASES["ipsi"])
+    except KeyError:
+        final_score_col = find_score_column(df_components, COMPONENT_SCORE_ALIASES["final"])
+    else:
+        final_score_col = f"{contra_score_col}/{ipsi_score_col}"
 
     rows = []
     for band, df_band in df_components.groupby("band", sort=False):
         df_band = df_band.copy()
-        df_band["component_score"] = pd.to_numeric(df_band[final_score_col], errors="coerce")
+        if contra_score_col is not None and ipsi_score_col is not None:
+            contra_score = pd.to_numeric(df_band[contra_score_col], errors="coerce")
+            ipsi_score = pd.to_numeric(df_band[ipsi_score_col], errors="coerce")
+            df_band["component_score"] = contra_score.add(ipsi_score, fill_value=0)
+        else:
+            df_band["component_score"] = pd.to_numeric(df_band[final_score_col], errors="coerce")
         component_scores = df_band["component_score"].to_numpy()
 
         for components in COMPONENT_GROUP_TEMPLATES:
@@ -79,7 +86,7 @@ def score_component_groups(df_components):
                     "sel_comp": str(components),
                     "components": list(components),
                     "absolute_components": [int(df_band["n_comp"].iloc[component]) for component in components],
-                    "component_assessment_score": float(np.sum(scores)),
+                    "component_assessment_score": float(np.mean(scores)),
                     "component_score_method": final_score_col,
                 }
             )

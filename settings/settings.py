@@ -9,12 +9,12 @@ class PreprocessingSettings:
     low_freq: int = 5
     high_freq: int = 35
     baseline_ms: int = 500
-    trial_dur_ms: int = 8000   # 4000  #8000
+    trial_dur_ms: int = 4000   # 4000  #8000
     start_shift_ms: int = 1000    # 1000   #0
     end_shift_ms: int = 0
     
-    class1_photo: int = 1
-    class2_photo: int = 2
+    class1_photo: int = 2
+    class2_photo: int = 3
 
 @dataclass
 class CSPSettings:
@@ -41,8 +41,9 @@ class Settings:
 
     folder_data: str = r"data"
     project: str = "pr_AstroSync"
-    stage: str = "exp"
-    session: str = "04_03 Artem"
+    stage: str = "test"
+    session: str = "05_08 Artem"
+    classifier_output_path_template: str = r"models/{project}/{stage}/{session}/feat{components}_{band}_{record_stem}.json"
 
     CSP: CSPSettings = field(default_factory=CSPSettings)
     preprocess: PreprocessingSettings = field(default_factory=PreprocessingSettings)

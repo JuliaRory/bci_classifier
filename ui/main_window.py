@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 from pathlib import Path
 import subprocess
 import ast
@@ -24,6 +25,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.metrics import brier_score_loss
+from scipy.signal import butter
 
 
 from settings.settings import Settings
@@ -155,6 +157,10 @@ class MainWindow(QMainWindow):
     def widgets_results(self):
         self.components_table = self._create_results_table()
         self.pair_scores_table = self._create_results_table()
+        self.classifier_path_edit = QLineEdit()
+        self.classifier_path_edit.setPlaceholderText("models/{project}/{stage}/{session}/feat{components}_{band}_{record_stem}.json")
+        self._classifier_path_auto = True
+        self.button_save_classifier = create_button("Сохранить классификатор")
         self.best_pair_label = QLabel("Subject -. Record -. Band -. Components -. Component assessment score: -. Balanced accuracy: -. Brier score: -. Ranking score: -.")
         self.best_pair_label.setWordWrap(True)
         self.best_pair_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
@@ -250,6 +256,8 @@ class MainWindow(QMainWindow):
         right_panel.addLayout(bands_main_layout)
         right_panel.addWidget(self.button_calculate_csp)
         right_panel.addWidget(self.button_show_csp_plot)
+        right_panel.addLayout(create_hbox([QLabel("Путь классификатора:"), self.classifier_path_edit]))
+        right_panel.addWidget(self.button_save_classifier)
         right_panel.addWidget(QLabel("Лучшая пара компонент-диапазон"))
         right_panel.addWidget(self.best_pair_label)
         right_panel.addWidget(self.best_components_plot_scroll, stretch=1)
@@ -269,13 +277,15 @@ class MainWindow(QMainWindow):
         
         # Выбор файла
         self.files_list.itemClicked.connect(self.on_file_selected)
-        self.dataset_list.itemSelectionChanged.connect(self.refresh_csp_results)
+        self.dataset_list.itemSelectionChanged.connect(self.on_dataset_selection_changed)
         self.pair_scores_table.itemSelectionChanged.connect(self.on_pair_score_selected)
         
         # Кнопки
         self.button_preprocess.clicked.connect(self.on_process_file)
         self.button_calculate_csp.clicked.connect(self.on_calc_csp)
         self.button_show_csp_plot.clicked.connect(self.on_show_csp_components_plot)
+        self.button_save_classifier.clicked.connect(self.on_save_classifier)
+        self.classifier_path_edit.textEdited.connect(self._mark_classifier_path_manual)
         self.checkbox_regul.stateChanged.connect(
             lambda: self.spin_box_regul_alpha.setEnabled(self.checkbox_regul.isChecked())
         )
@@ -424,6 +434,7 @@ class MainWindow(QMainWindow):
         self._update_list_widget(self.files_list, self._current_folder)
         self._update_list_widget(self.dataset_list, self._current_dataset_folder)
         self.refresh_csp_results()
+        self._update_classifier_output_path()
     
 
     def _update_list_widget(self, list_widget, folder):
@@ -650,7 +661,7 @@ class MainWindow(QMainWindow):
         if df_best.empty:
             return None
 
-        df_best = self._ensure_ranking_score(df_best)
+        df_best = self._attach_component_assessment_scores(df_best)
 
         stems = set(self._selected_record_stems())
         if stems and "record" in df_best.columns:
@@ -699,7 +710,7 @@ class MainWindow(QMainWindow):
         if df_best.empty:
             return pd.DataFrame()
 
-        df_best = self._ensure_ranking_score(df_best)
+        df_best = self._attach_component_assessment_scores(df_best)
 
         stems = set(self._selected_record_stems())
         if stems and "record" in df_best.columns:
@@ -747,19 +758,16 @@ class MainWindow(QMainWindow):
         return df_cv
 
     def _attach_component_assessment_scores(self, df_cv):
-        if df_cv.empty or "component_assessment_score" in df_cv.columns:
+        if df_cv.empty:
             return self._ensure_ranking_score(df_cv.copy())
 
         df_components = self._read_component_tables()
         if df_components.empty:
-            return df_cv
+            return self._ensure_ranking_score(df_cv.copy())
 
-        df_groups = self._score_component_groups(df_components)
-        if df_groups.empty:
-            return df_cv
-
-        df_groups = df_groups.copy()
-        df_groups["sel_comp"] = df_groups["components"].apply(lambda value: str(tuple(value)))
+        component_scores_by_band = self._component_scores_by_band(df_components)
+        if not component_scores_by_band:
+            return self._ensure_ranking_score(df_cv.copy())
 
         df_cv = df_cv.copy()
         if "sel_comp" in df_cv.columns:
@@ -767,14 +775,50 @@ class MainWindow(QMainWindow):
                 lambda value: str(tuple(ast.literal_eval(value))) if isinstance(value, str) else str(tuple(value))
             )
 
-        df_cv = df_cv.merge(
-            df_groups[["band", "sel_comp", "component_assessment_score"]],
-            on=["band", "sel_comp"],
-            how="left",
+        df_cv = df_cv.drop(columns=["component_assessment_score", "ranking_score"], errors="ignore")
+        df_cv["component_assessment_score"] = df_cv.apply(
+            lambda row: self._score_selected_components(row, component_scores_by_band),
+            axis=1,
         )
         if "component_assessment_score" in df_cv.columns and "brier score" in df_cv.columns:
             df_cv["ranking_score"] = df_cv["component_assessment_score"] * (2 - df_cv["brier score"])
         return df_cv
+
+    def _component_scores_by_band(self, df_components):
+        scores_by_band = {}
+        required_columns = {"band", "final_score_contra", "final_score_ipsi"}
+        if df_components.empty or not required_columns.issubset(df_components.columns):
+            return scores_by_band
+
+        for band, df_band in df_components.groupby("band", sort=False):
+            contra_score = pd.to_numeric(df_band["final_score_contra"], errors="coerce")
+            ipsi_score = pd.to_numeric(df_band["final_score_ipsi"], errors="coerce")
+            component_scores = contra_score.add(ipsi_score, fill_value=0).to_numpy()
+            scores_by_band[band] = component_scores
+            scores_by_band[str(band)] = component_scores
+
+        return scores_by_band
+
+    def _score_selected_components(self, row, component_scores_by_band):
+        if "band" not in row.index:
+            return np.nan
+
+        component_scores = component_scores_by_band.get(row["band"])
+        if component_scores is None:
+            component_scores = component_scores_by_band.get(str(row["band"]))
+        if component_scores is None:
+            return np.nan
+
+        components = self._coerce_components_value(self._row_components(row))
+        if not components:
+            return np.nan
+
+        try:
+            selected_scores = [component_scores[component] for component in components]
+        except (IndexError, TypeError):
+            return np.nan
+
+        return float(np.mean(selected_scores))
 
     def _ensure_ranking_score(self, df):
         if df is None or df.empty:
@@ -887,6 +931,137 @@ class MainWindow(QMainWindow):
         epochs_csp = np.array([epoch @ spatial_filters[:, components] for epoch in epochs_band])
         return get_csp_features(epochs_csp)
 
+    def _mark_classifier_path_manual(self, *_):
+        self._classifier_path_auto = False
+
+    def _format_number_for_filename(self, value):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        return str(int(value)) if value.is_integer() else str(value).replace(".", "p")
+
+    def _sanitize_filename_part(self, value):
+        text = str(value).strip()
+        for char in '<>:"/\\|?*':
+            text = text.replace(char, "_")
+        return text
+
+    def _classifier_path_context(self, row=None):
+        band = None
+        components = []
+        record_stem = None
+
+        if row is not None:
+            band = self._coerce_band_value(row["band"])
+            components = self._coerce_components_value(self._row_components(row))
+            record_stem = self._record_stem_from_row(row)
+
+        if record_stem is None:
+            selected_stems = self._selected_record_stems()
+            record_stem = selected_stems[0] if selected_stems else "record"
+
+        if band is None:
+            band_text = "band"
+        else:
+            band_text = "-".join(self._format_number_for_filename(value) for value in band)
+
+        if components:
+            components_text = "_".join(str(component) for component in components)
+        else:
+            components_text = "components"
+
+        return {
+            "project": self._sanitize_filename_part(self.settings.project),
+            "stage": self._sanitize_filename_part(self.settings.stage),
+            "session": self._sanitize_filename_part(self.settings.session),
+            "record_stem": self._sanitize_filename_part(record_stem),
+            "band": self._sanitize_filename_part(band_text),
+            "components": self._sanitize_filename_part(components_text),
+        }
+
+    def _default_classifier_output_path(self, row=None):
+        template = getattr(
+            self.settings,
+            "classifier_output_path_template",
+            r"models/{project}/{stage}/{session}/feat{components}_{band}_{record_stem}.json",
+        )
+        return template.format(**self._classifier_path_context(row))
+
+    def _update_classifier_output_path(self, row=None, force=False):
+        if not force and not self._classifier_path_auto and self.classifier_path_edit.text().strip():
+            return
+
+        if row is None:
+            row = self._read_selected_pair_row_from_table()
+        self.classifier_path_edit.setText(self._default_classifier_output_path(row))
+        self._classifier_path_auto = True
+
+    def _train_classifier_for_row(self, row):
+        band = self._coerce_band_value(row["band"])
+        components = self._coerce_components_value(self._row_components(row))
+        if band is None or not components:
+            raise ValueError("Не удалось прочитать band/components для выбранной строки.")
+
+        dataset_path = self._find_epochs_dataset_path(row)
+        if dataset_path is None or not dataset_path.exists():
+            raise FileNotFoundError("Не найден EPOCHS-файл для выбранной записи.")
+
+        record_stem = self._record_stem_from_row(row) or dataset_path.stem[len("EPOCHS_") :]
+        matrix_path = self._find_csp_matrix(band, record_stem=record_stem)
+        if matrix_path is None:
+            raise FileNotFoundError(f"Не найдена CSP matrix для band {band} и record {record_stem}.")
+
+        with File(dataset_path, "r") as h5f:
+            epochs = h5f["epochs"][:]
+            labels = h5f["labels"][:].squeeze().astype(int)
+
+        with File(matrix_path, "r") as h5f:
+            spatial_filters = h5f["projForward"][:]
+            spatial_patterns = h5f["projInverse"][:]
+
+        features = self._build_probability_features(epochs, spatial_filters, band, components)
+        classifier = LDA()
+        classifier.fit(features, labels)
+        return classifier, spatial_patterns, band, components
+
+    def _save_classifier_for_row(self, row, output_path):
+        classifier, spatial_patterns, band, components = self._train_classifier_for_row(row)
+        config = self._build_preprocess_config()
+
+        sos_basic = butter(
+            4,
+            [1, 40],
+            btype="bandpass",
+            output="sos",
+            fs=config["Fs"],
+        )
+        sos = butter(4, band, btype="bandpass", output="sos", fs=config["Fs"])
+
+        output_path = Path(output_path)
+        if not output_path.suffix:
+            output_path = output_path.with_suffix(".json")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        model_data = {
+            "spatialW": spatial_patterns[:, components].tolist(),
+            "sos_basic": sos_basic.tolist(),
+            "sos": sos.tolist(),
+            "band": [float(value) for value in band],
+            "features_type": "csp",
+            "Cref": None,
+            "inv_sqrt": None,
+            "w_lda": classifier.coef_[0].tolist(),
+            "b_lda": float(classifier.intercept_[0]),
+            "fs": config["Fs"],
+            "n_components": len(components),
+        }
+
+        with open(output_path, "w", encoding="utf-8") as file:
+            json.dump(model_data, file, indent=4)
+
+        return output_path
+
     def _save_probability_plot_for_row(self, row):
         if row is None:
             raise ValueError("Нет выбранной пары band-components.")
@@ -919,9 +1094,12 @@ class MainWindow(QMainWindow):
         brier = brier_score_loss(labels, y_proba)
 
         fig = plot_proba(labels, y_proba)
+        title_scores = f"Plot in-sample Brier = {brier:.3f}"
+        if "brier score" in row.index and pd.notna(row["brier score"]):
+            title_scores = f"CV Brier = {float(row['brier score']):.3f}. {title_scores}"
         fig.suptitle(
             f"{self.settings.session}. {record_stem}. Band {band}. Components {tuple(components)}. "
-            f"Brier score = {brier:.3f}"
+            f"{title_scores}"
         )
 
         band_text = str([int(x) if float(x).is_integer() else x for x in band])
@@ -1100,17 +1278,19 @@ class MainWindow(QMainWindow):
         )
 
         if df_components.empty:
-            self._pair_scores_view_df = self._prepare_pair_scores_view_df().head(1000).copy()
-            self._pair_scores_best_df = self._sort_pair_scores(self._pair_scores_view_df.copy())
+            self._pair_scores_best_df = self._sort_pair_scores(self._prepare_pair_scores_view_df())
+            self._pair_scores_view_df = self._pair_scores_best_df.head(1000).copy()
             self.best_pair_label.setText(self._read_best_pair_text())
             self._update_best_components_plot()
             self._show_dataframe(self.pair_scores_table, self._pair_scores_view_df, max_rows=1000)
             self.pair_scores_table.blockSignals(False)
+            self._select_best_pair_row()
+            self._update_classifier_output_path()
             return
 
         try:
-            self._pair_scores_view_df = self._prepare_pair_scores_view_df().head(1000).copy()
-            self._pair_scores_best_df = self._sort_pair_scores(self._pair_scores_view_df.copy())
+            self._pair_scores_best_df = self._sort_pair_scores(self._prepare_pair_scores_view_df())
+            self._pair_scores_view_df = self._pair_scores_best_df.head(1000).copy()
             best_pair_text = self._read_best_pair_text()
         except Exception as exc:
             print(f"Не удалось загрузить cross-validation scores: {exc}")
@@ -1120,31 +1300,58 @@ class MainWindow(QMainWindow):
             self._pair_scores_best_df = pd.DataFrame()
             self._show_dataframe(self.pair_scores_table, pd.DataFrame())
             self.pair_scores_table.blockSignals(False)
+            self._update_classifier_output_path()
             return
 
         self.best_pair_label.setText(best_pair_text)
         self._update_best_components_plot()
         self._show_dataframe(self.pair_scores_table, self._pair_scores_view_df, max_rows=1000)
         self.pair_scores_table.blockSignals(False)
+        self._select_best_pair_row()
+        self._update_classifier_output_path()
+
+    def _select_best_pair_row(self):
+        if self._pair_scores_view_df is None or self._pair_scores_view_df.empty:
+            return
+        if self.pair_scores_table.rowCount() == 0:
+            return
+        self.pair_scores_table.selectRow(0)
+
+    def on_dataset_selection_changed(self):
+        self.refresh_csp_results()
+
+        if not self._selected_dataset_records():
+            return
+
+        row = self._read_best_pair_row()
+        if row is None:
+            print("Автосохранение классификатора: лучшая пара не найдена.")
+            return
+
+        self._update_classifier_output_path(row=row, force=True)
+        output_path_text = self.classifier_path_edit.text().strip()
+
+        try:
+            output_path = self._save_classifier_for_row(row, output_path_text)
+        except Exception as exc:
+            print(f"Автосохранение классификатора не выполнено: {exc}")
+            return
+
+        self.classifier_path_edit.setText(str(output_path))
+        print(f"Автосохранение классификатора: {output_path}")
 
     def on_pair_score_selected(self):
         self._update_best_components_plot()
-
-    def _normalize_series(self, series):
-        series = pd.to_numeric(series, errors="coerce")
-        span = series.max() - series.min()
-        if pd.isna(span) or span == 0:
-            return pd.Series([1.0] * len(series), index=series.index)
-        return (series - series.min()) / span
+        self._update_classifier_output_path()
 
     def _score_component_groups(self, df_components):
         output_columns = ["band", "components", "absolute_components", "component_assessment_score"]
         rows = []
         for band, df_band in df_components.groupby("band", sort=False):
             df_band = df_band.copy()
-            contra_score = self._normalize_series(df_band["final_score_contra"])
-            ipsi_score = self._normalize_series(df_band["final_score_ipsi"])
-            df_band["component_score"] = pd.concat([contra_score, ipsi_score], axis=1).max(axis=1)
+            contra_score = pd.to_numeric(df_band["final_score_contra"], errors="coerce")
+            ipsi_score = pd.to_numeric(df_band["final_score_ipsi"], errors="coerce")
+            df_band["component_score"] = contra_score.add(ipsi_score, fill_value=0)
             component_scores = df_band["component_score"].to_numpy()
 
             for components in COMPONENT_GROUP_TEMPLATES:
@@ -1158,7 +1365,7 @@ class MainWindow(QMainWindow):
                         "band": band,
                         "components": list(components),
                         "absolute_components": [int(df_band["n_comp"].iloc[component]) for component in components],
-                        "component_assessment_score": float(sum(scores)),
+                        "component_assessment_score": float(np.mean(scores)),
                     }
                 )
 
@@ -1307,6 +1514,15 @@ class MainWindow(QMainWindow):
             "alpha": s.alpha_reg,
         }
 
+    def _build_cv_config(self):
+        feature_groups = sorted(COMPONENT_GROUP_TEMPLATES, key=lambda group: (len(group), group))
+        return {
+            "n_splits": 3,
+            "test_size": 5,
+            "feature_groups": feature_groups,
+            "classifier": "lda",
+        }
+
     def on_process_file(self):
         """Обработка выбранного файла"""
         if len(self._current_records) == 0:
@@ -1344,14 +1560,26 @@ class MainWindow(QMainWindow):
         s = self.settings
         folder_input = self._current_dataset_folder
         folder_output = os.path.join(r"data", s.project, "features", "csp", s.stage, s.session)
+        folder_cv_output = self._folder_cv_scores()
         os.makedirs(folder_output, exist_ok=True)
+        os.makedirs(folder_cv_output, exist_ok=True)
 
         try:
             from scripts.calculate_csp import process_records_csp
+            from scripts.cross_validated_test import process_records_cross_validated
 
             print("Расчет CSP с текущими настройками")
             print("config_csp:", config_csp)
             process_records_csp(folder_input, records, folder_output, config, config_csp)
+            print("Расчет cross-validation таблиц")
+            process_records_cross_validated(
+                folder_input,
+                records,
+                folder_cv_output,
+                config,
+                config_csp,
+                self._build_cv_config(),
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Ошибка расчета CSP", str(exc))
             raise
@@ -1498,6 +1726,35 @@ class MainWindow(QMainWindow):
         record_stem = self._record_stem_from_row(row)
         self._open_csp_component_plot_clear([low, high], record_stem=record_stem)
     
+    def on_save_classifier(self):
+        row = self._read_selected_pair_row_from_table()
+        if row is None:
+            QMessageBox.warning(
+                self,
+                "Сохранение классификатора",
+                "Выберите строку в таблице Cross-validation scores.",
+            )
+            return
+
+        output_path_text = self.classifier_path_edit.text().strip()
+        if not output_path_text:
+            output_path_text = self._default_classifier_output_path(row)
+            self.classifier_path_edit.setText(output_path_text)
+            self._classifier_path_auto = True
+
+        try:
+            output_path = self._save_classifier_for_row(row, output_path_text)
+        except Exception as exc:
+            QMessageBox.warning(self, "Сохранение классификатора", str(exc))
+            return
+
+        self.classifier_path_edit.setText(str(output_path))
+        QMessageBox.information(
+            self,
+            "Сохранение классификатора",
+            f"Классификатор сохранен:\n{output_path}",
+        )
+
     def on_train_classifier(self):
         """Обучение классификатора"""
         self.status_label.setText("Обучение классификатора...")
