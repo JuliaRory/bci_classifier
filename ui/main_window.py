@@ -36,8 +36,9 @@ from src.utils.layout_utils import create_hbox, create_vbox
 from src.utils.montage_processing import find_ch_idx, get_channel_names, get_topo_positions
 from src.analysis.features import get_csp_features
 from src.analysis.preprocessing import bandpass_filter
-from src.analysis.csp_component_scores import get_selected_component_indices
+from src.analysis.csp_component_scores import build_component_assessment, get_selected_component_indices
 from src.visualization.ROC_curve import plot_proba
+from src.visualization.plot_csp_components import plot_10_csp_components
 
 from scripts.create_dataset import process_records
 
@@ -464,6 +465,14 @@ class MainWindow(QMainWindow):
     def _folder_probability_plots(self):
         s = self.settings
         return os.path.join(r"results", s.project, s.stage, s.session, "PROBA_selected")
+
+    def _folder_final_probability_plots(self):
+        s = self.settings
+        return os.path.join(r"results", s.project, s.stage, s.session, "PROBA_final")
+
+    def _folder_models(self):
+        s = self.settings
+        return os.path.join(r"models", s.project, s.stage, s.session)
 
     def _folder_cv_scores(self):
         s = self.settings
@@ -1023,10 +1032,10 @@ class MainWindow(QMainWindow):
         features = self._build_probability_features(epochs, spatial_filters, band, components)
         classifier = LDA()
         classifier.fit(features, labels)
-        return classifier, spatial_patterns, band, components
+        return classifier, spatial_patterns, band, components, features, labels
 
     def _save_classifier_for_row(self, row, output_path):
-        classifier, spatial_patterns, band, components = self._train_classifier_for_row(row)
+        classifier, spatial_patterns, band, components, _, _ = self._train_classifier_for_row(row)
         config = self._build_preprocess_config()
 
         sos_basic = butter(
@@ -1061,6 +1070,49 @@ class MainWindow(QMainWindow):
             json.dump(model_data, file, indent=4)
 
         return output_path
+
+    def _save_final_classifier_and_probability_plot(self, row, output_path, plot_output_path):
+        classifier, spatial_patterns, band, components, features, labels = self._train_classifier_for_row(row)
+        config = self._build_preprocess_config()
+
+        sos_basic = butter(
+            4,
+            [1, 40],
+            btype="bandpass",
+            output="sos",
+            fs=config["Fs"],
+        )
+        sos = butter(4, band, btype="bandpass", output="sos", fs=config["Fs"])
+
+        output_path = Path(output_path)
+        plot_output_path = Path(plot_output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plot_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        model_data = {
+            "spatialW": spatial_patterns[:, components].tolist(),
+            "sos_basic": sos_basic.tolist(),
+            "sos": sos.tolist(),
+            "band": [float(value) for value in band],
+            "features_type": "csp",
+            "Cref": None,
+            "inv_sqrt": None,
+            "w_lda": classifier.coef_[0].tolist(),
+            "b_lda": float(classifier.intercept_[0]),
+            "fs": config["Fs"],
+            "n_components": len(components),
+        }
+
+        with open(output_path, "w", encoding="utf-8") as file:
+            json.dump(model_data, file, indent=4)
+
+        y_proba = classifier.predict_proba(features)[:, 1]
+        brier = brier_score_loss(labels, y_proba)
+        fig = plot_proba(labels, y_proba)
+        fig.suptitle(f"Brier score = {brier:.3f}")
+        fig.savefig(plot_output_path, dpi=300, bbox_inches="tight")
+        close(fig)
+        return output_path, plot_output_path
 
     def _save_probability_plot_for_row(self, row):
         if row is None:
@@ -1278,8 +1330,8 @@ class MainWindow(QMainWindow):
         )
 
         if df_components.empty:
-            self._pair_scores_best_df = self._sort_pair_scores(self._prepare_pair_scores_view_df())
-            self._pair_scores_view_df = self._pair_scores_best_df.head(1000).copy()
+            self._pair_scores_view_df = self._prepare_pair_scores_view_df().head(1000).copy()
+            self._pair_scores_best_df = self._sort_pair_scores(self._pair_scores_view_df.copy())
             self.best_pair_label.setText(self._read_best_pair_text())
             self._update_best_components_plot()
             self._show_dataframe(self.pair_scores_table, self._pair_scores_view_df, max_rows=1000)
@@ -1289,8 +1341,8 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            self._pair_scores_best_df = self._sort_pair_scores(self._prepare_pair_scores_view_df())
-            self._pair_scores_view_df = self._pair_scores_best_df.head(1000).copy()
+            self._pair_scores_view_df = self._prepare_pair_scores_view_df().head(1000).copy()
+            self._pair_scores_best_df = self._sort_pair_scores(self._pair_scores_view_df.copy())
             best_pair_text = self._read_best_pair_text()
         except Exception as exc:
             print(f"Не удалось загрузить cross-validation scores: {exc}")
@@ -1313,9 +1365,26 @@ class MainWindow(QMainWindow):
     def _select_best_pair_row(self):
         if self._pair_scores_view_df is None or self._pair_scores_view_df.empty:
             return
+        if self._pair_scores_best_df is None or self._pair_scores_best_df.empty:
+            return
         if self.pair_scores_table.rowCount() == 0:
             return
-        self.pair_scores_table.selectRow(0)
+
+        best_row = self._pair_scores_best_df.iloc[0]
+        match_columns = [
+            column
+            for column in ["session", "record", "classifier", "band", "pipeline", "sel_comp"]
+            if column in self._pair_scores_view_df.columns and column in best_row.index
+        ]
+        if not match_columns:
+            return
+
+        for row_index, (_, row) in enumerate(self._pair_scores_view_df.iterrows()):
+            if row_index >= self.pair_scores_table.rowCount():
+                break
+            if all(str(row[column]) == str(best_row[column]) for column in match_columns):
+                self.pair_scores_table.selectRow(row_index)
+                return
 
     def on_dataset_selection_changed(self):
         self.refresh_csp_results()
@@ -1523,6 +1592,189 @@ class MainWindow(QMainWindow):
             "classifier": "lda",
         }
 
+    def _build_cv_config_for_record(self, record_name):
+        config_cv = self._build_cv_config()
+        config_cv["feature_groups"] = self._feature_groups_from_component_scores(record_name)
+        return config_cv
+
+    def _feature_groups_from_component_scores(self, record_name):
+        record_stem = Path(record_name).stem
+        if record_stem.startswith("EPOCHS_"):
+            record_stem = record_stem[len("EPOCHS_"):]
+
+        groups = {
+            (0, -1),
+            (0, 1),
+            (0, 1, -1),
+            (0, -2, -1),
+            (0, 1, -2, -1),
+        }
+        assessment_files = sorted(Path(self._folder_csp()).glob(f"DATAFRAME_*_{record_stem}.xlsx"))
+        for assessment_file in assessment_files:
+            try:
+                df = pd.read_excel(assessment_file)
+            except Exception:
+                continue
+            if "n_comp" not in df.columns or "final_score" not in df.columns:
+                continue
+            component_2_rows = df[df["n_comp"].astype(int) == 2]
+            if not component_2_rows.empty and float(component_2_rows["final_score"].max()) > 3.0:
+                groups.add((0, 2, -1))
+                groups.add((0, 1, 2, -1))
+
+        return sorted(groups, key=lambda group: (len(group), group))
+
+    def _save_fair_cv_summary(self):
+        folder_cv = Path(self._folder_cv_scores())
+        cv_files = sorted(path for path in folder_cv.glob("*.xlsx") if path.name != "fair_cv_summary.xlsx")
+        rows = []
+        for cv_file in cv_files:
+            try:
+                df = pd.read_excel(cv_file)
+            except Exception:
+                continue
+            required_columns = {"pipeline", "session", "record", "classifier", "band", "sel_comp"}
+            if not required_columns.issubset(df.columns):
+                continue
+            df_fair = df[df["pipeline"] == "split_before_csp"].copy()
+            if df_fair.empty:
+                continue
+            rows.append(
+                df_fair.groupby(["session", "record", "classifier", "band", "sel_comp"], as_index=False)
+                .agg(
+                    folds=("fold", "nunique"),
+                    balanced_accuracy_mean=("balanced accuracy", "mean"),
+                    balanced_accuracy_std=("balanced accuracy", "std"),
+                    accuracy_mean=("accuracy", "mean"),
+                    f1_mean=("f1", "mean"),
+                    recall_mean=("recall", "mean"),
+                    precision_mean=("precision", "mean"),
+                    roc_auc_mean=("roc-auc", "mean"),
+                    brier_score_mean=("brier score", "mean"),
+                    log_loss_mean=("log loss", "mean"),
+                )
+            )
+
+        if not rows:
+            return None
+
+        df_summary = pd.concat(rows, ignore_index=True).sort_values(
+            by=["session", "record", "balanced_accuracy_mean", "brier_score_mean"],
+            ascending=[True, True, False, True],
+        )
+        output_path = folder_cv / "fair_cv_summary.xlsx"
+        df_summary.to_excel(output_path, index=False)
+        print("output file ->", output_path)
+        return output_path
+
+    def _top_final_model_rows(self, record_name, top_n=3):
+        record_stem = Path(record_name).stem
+        if record_stem.startswith("EPOCHS_"):
+            record_stem = record_stem[len("EPOCHS_"):]
+        cv_scores_path = Path(self._folder_cv_scores()) / f"{record_stem}.xlsx"
+        if not cv_scores_path.exists():
+            return pd.DataFrame()
+
+        df = pd.read_excel(cv_scores_path)
+        record_value = Path(record_name[len("EPOCHS_") :]).name if record_name.startswith("EPOCHS_") else record_name
+        if "pipeline" in df.columns:
+            df = df[df["pipeline"] == "split_before_csp"].copy()
+        if "record" in df.columns:
+            df = df[df["record"] == record_value].copy()
+        if df.empty:
+            return df
+
+        summary = self._average_cv_scores_across_folds(df)
+        return summary.sort_values(
+            ["balanced accuracy", "brier score"],
+            ascending=[False, True],
+            ignore_index=True,
+        ).head(top_n)
+
+    def _save_final_models_for_records(self, records, top_n=3):
+        saved_paths = []
+        folder_models = Path(self._folder_models())
+        folder_proba = Path(self._folder_final_probability_plots())
+        folder_models.mkdir(parents=True, exist_ok=True)
+        folder_proba.mkdir(parents=True, exist_ok=True)
+
+        for record_name in records:
+            top_rows = self._top_final_model_rows(record_name, top_n=top_n)
+            if top_rows.empty:
+                print(f"Финальные модели: нет CV-строк для {record_name}")
+                continue
+            record_stem = Path(record_name).stem
+            if record_stem.startswith("EPOCHS_"):
+                record_stem = record_stem[len("EPOCHS_"):]
+            for rank, (_, row) in enumerate(top_rows.iterrows(), start=1):
+                row = row.copy()
+                if "components" not in row.index and "sel_comp" in row.index:
+                    row["components"] = row["sel_comp"]
+                band = self._coerce_band_value(row["band"])
+                components = self._coerce_components_value(self._row_components(row))
+                band_text = json.dumps([int(value) if float(value).is_integer() else value for value in band])
+                output_name = f"rank{rank}_feat{tuple(components)}_{band_text}_{record_stem}.json"
+                model_path = folder_models / output_name
+                plot_path = folder_proba / f"{model_path.stem}.png"
+                saved_model, saved_plot = self._save_final_classifier_and_probability_plot(row, model_path, plot_path)
+                saved_paths.extend([saved_model, saved_plot])
+                print("model ->", saved_model)
+                print("probability plot ->", saved_plot)
+
+        return saved_paths
+
+    def _redraw_csp_component_images(self):
+        folder_csp = Path(self._folder_csp())
+        if not folder_csp.exists():
+            return 0
+
+        xy = self._topomap_positions()
+        total = 0
+        for matrix_path in sorted(folder_csp.glob("MATRIX_*.hdf")):
+            try:
+                with File(matrix_path, "r") as h5f:
+                    proj_inverse = h5f["projInverse"][:]
+                    evals = h5f["evals"][:]
+                    metadata_raw = h5f["metadata_csp"][()] if "metadata_csp" in h5f else None
+            except Exception as exc:
+                print(f"Не удалось прочитать CSP matrix {matrix_path}: {exc}")
+                continue
+
+            metadata_csp = {}
+            if metadata_raw is not None:
+                if isinstance(metadata_raw, bytes):
+                    metadata_raw = metadata_raw.decode("utf-8")
+                try:
+                    metadata_csp = json.loads(metadata_raw)
+                except (TypeError, json.JSONDecodeError):
+                    metadata_csp = {}
+
+            band = metadata_csp.get("band")
+            component_scores = build_component_assessment(proj_inverse, evals)
+            filename = matrix_path.name[len("MATRIX_") :]
+            if filename.endswith(".hdf"):
+                filename = filename[:-4] + ".png"
+
+            outputs = [
+                (Path(self._folder_csp_plots_clear()) / filename, True),
+                (Path(self._folder_csp_plots()) / filename, False),
+            ]
+            for output_path, same_vlim in outputs:
+                fig = plot_10_csp_components(
+                    abs(evals),
+                    proj_inverse,
+                    xy,
+                    component_scores=component_scores,
+                    same_vlim=same_vlim,
+                )
+                fig.suptitle(f"CSP: {band} Hz", fontsize=16)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                fig.savefig(output_path, dpi=300, bbox_inches="tight")
+                close(fig)
+                print("output file ->", output_path)
+                total += 1
+        return total
+
     def on_process_file(self):
         """Обработка выбранного файла"""
         if len(self._current_records) == 0:
@@ -1571,15 +1823,24 @@ class MainWindow(QMainWindow):
             print("Расчет CSP с текущими настройками")
             print("config_csp:", config_csp)
             process_records_csp(folder_input, records, folder_output, config, config_csp)
+            saved_csp_images = self._redraw_csp_component_images()
+            print(f"CSP-картинки сохранены: {saved_csp_images}")
+
             print("Расчет cross-validation таблиц")
-            process_records_cross_validated(
-                folder_input,
-                records,
-                folder_cv_output,
-                config,
-                config_csp,
-                self._build_cv_config(),
-            )
+            for record in records:
+                config_cv = self._build_cv_config_for_record(record)
+                print(f"Feature groups for {record}: {config_cv['feature_groups']}")
+                process_records_cross_validated(
+                    folder_input,
+                    [record],
+                    folder_cv_output,
+                    config,
+                    config_csp,
+                    config_cv,
+                )
+
+            self._save_fair_cv_summary()
+            self._save_final_models_for_records(records, top_n=3)
         except Exception as exc:
             QMessageBox.critical(self, "Ошибка расчета CSP", str(exc))
             raise
