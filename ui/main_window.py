@@ -912,12 +912,13 @@ class MainWindow(QMainWindow):
         if not folder_csp.exists() or band is None:
             return None
 
-        band_text = str([int(x) if float(x).is_integer() else x for x in band])
+        band_variants = self._band_text_variants(band)
         stems = [record_stem] if record_stem else self._selected_record_stems()
         candidates = [
             path
             for path in folder_csp.iterdir()
-            if path.name.startswith(f"MATRIX_{band_text}_") and path.suffix == ".hdf"
+            if path.suffix == ".hdf"
+            and any(path.name.startswith(f"MATRIX_{band_text}_") for band_text in band_variants)
         ]
 
         if stems:
