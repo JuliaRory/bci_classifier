@@ -277,7 +277,7 @@ class MainWindow(QMainWindow):
         
         # Выбор файла
         self.files_list.itemClicked.connect(self.on_file_selected)
-        self.dataset_list.itemSelectionChanged.connect(self.refresh_csp_results)
+        self.dataset_list.itemSelectionChanged.connect(self.on_dataset_selection_changed)
         self.pair_scores_table.itemSelectionChanged.connect(self.on_pair_score_selected)
         
         # Кнопки
@@ -988,11 +988,12 @@ class MainWindow(QMainWindow):
         )
         return template.format(**self._classifier_path_context(row))
 
-    def _update_classifier_output_path(self, force=False):
+    def _update_classifier_output_path(self, row=None, force=False):
         if not force and not self._classifier_path_auto and self.classifier_path_edit.text().strip():
             return
 
-        row = self._read_selected_pair_row_from_table()
+        if row is None:
+            row = self._read_selected_pair_row_from_table()
         self.classifier_path_edit.setText(self._default_classifier_output_path(row))
         self._classifier_path_auto = True
 
@@ -1277,18 +1278,19 @@ class MainWindow(QMainWindow):
         )
 
         if df_components.empty:
-            self._pair_scores_view_df = self._prepare_pair_scores_view_df().head(1000).copy()
-            self._pair_scores_best_df = self._sort_pair_scores(self._pair_scores_view_df.copy())
+            self._pair_scores_best_df = self._sort_pair_scores(self._prepare_pair_scores_view_df())
+            self._pair_scores_view_df = self._pair_scores_best_df.head(1000).copy()
             self.best_pair_label.setText(self._read_best_pair_text())
             self._update_best_components_plot()
             self._show_dataframe(self.pair_scores_table, self._pair_scores_view_df, max_rows=1000)
             self.pair_scores_table.blockSignals(False)
+            self._select_best_pair_row()
             self._update_classifier_output_path()
             return
 
         try:
-            self._pair_scores_view_df = self._prepare_pair_scores_view_df().head(1000).copy()
-            self._pair_scores_best_df = self._sort_pair_scores(self._pair_scores_view_df.copy())
+            self._pair_scores_best_df = self._sort_pair_scores(self._prepare_pair_scores_view_df())
+            self._pair_scores_view_df = self._pair_scores_best_df.head(1000).copy()
             best_pair_text = self._read_best_pair_text()
         except Exception as exc:
             print(f"Не удалось загрузить cross-validation scores: {exc}")
@@ -1305,7 +1307,38 @@ class MainWindow(QMainWindow):
         self._update_best_components_plot()
         self._show_dataframe(self.pair_scores_table, self._pair_scores_view_df, max_rows=1000)
         self.pair_scores_table.blockSignals(False)
+        self._select_best_pair_row()
         self._update_classifier_output_path()
+
+    def _select_best_pair_row(self):
+        if self._pair_scores_view_df is None or self._pair_scores_view_df.empty:
+            return
+        if self.pair_scores_table.rowCount() == 0:
+            return
+        self.pair_scores_table.selectRow(0)
+
+    def on_dataset_selection_changed(self):
+        self.refresh_csp_results()
+
+        if not self._selected_dataset_records():
+            return
+
+        row = self._read_best_pair_row()
+        if row is None:
+            print("Автосохранение классификатора: лучшая пара не найдена.")
+            return
+
+        self._update_classifier_output_path(row=row, force=True)
+        output_path_text = self.classifier_path_edit.text().strip()
+
+        try:
+            output_path = self._save_classifier_for_row(row, output_path_text)
+        except Exception as exc:
+            print(f"Автосохранение классификатора не выполнено: {exc}")
+            return
+
+        self.classifier_path_edit.setText(str(output_path))
+        print(f"Автосохранение классификатора: {output_path}")
 
     def on_pair_score_selected(self):
         self._update_best_components_plot()
@@ -1481,6 +1514,15 @@ class MainWindow(QMainWindow):
             "alpha": s.alpha_reg,
         }
 
+    def _build_cv_config(self):
+        feature_groups = sorted(COMPONENT_GROUP_TEMPLATES, key=lambda group: (len(group), group))
+        return {
+            "n_splits": 3,
+            "test_size": 5,
+            "feature_groups": feature_groups,
+            "classifier": "lda",
+        }
+
     def on_process_file(self):
         """Обработка выбранного файла"""
         if len(self._current_records) == 0:
@@ -1518,14 +1560,26 @@ class MainWindow(QMainWindow):
         s = self.settings
         folder_input = self._current_dataset_folder
         folder_output = os.path.join(r"data", s.project, "features", "csp", s.stage, s.session)
+        folder_cv_output = self._folder_cv_scores()
         os.makedirs(folder_output, exist_ok=True)
+        os.makedirs(folder_cv_output, exist_ok=True)
 
         try:
             from scripts.calculate_csp import process_records_csp
+            from scripts.cross_validated_test import process_records_cross_validated
 
             print("Расчет CSP с текущими настройками")
             print("config_csp:", config_csp)
             process_records_csp(folder_input, records, folder_output, config, config_csp)
+            print("Расчет cross-validation таблиц")
+            process_records_cross_validated(
+                folder_input,
+                records,
+                folder_cv_output,
+                config,
+                config_csp,
+                self._build_cv_config(),
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Ошибка расчета CSP", str(exc))
             raise
