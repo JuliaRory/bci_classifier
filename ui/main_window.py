@@ -115,7 +115,7 @@ class MainWindow(QMainWindow):
     def widgets_prepross(self):
         s = self.settings.preprocess
         self.spin_box_baseline_ms = create_spin_box(0, 5000, s.baseline_ms)
-        self.spin_box_trial_dur_ms = create_spin_box(0, 5000, s.trial_dur_ms)
+        self.spin_box_trial_dur_ms = create_spin_box(0, 50000, s.trial_dur_ms, step=100)
         self.spin_box_start_shift_ms = create_spin_box(0, 5000, s.start_shift_ms)
         self.spin_box_class1_photo = create_spin_box(1, 3, s.class1_photo)
         self.spin_box_class2_photo = create_spin_box(1, 3, s.class2_photo)
@@ -444,7 +444,7 @@ class MainWindow(QMainWindow):
 
     def _folder_csp_plots_clear(self):
         s = self.settings
-        return os.path.join(r"results", s.project, s.stage, s.session, "CSP_components_clear")
+        return os.path.join(r"results", s.project, s.stage, s.session, "CSP_components") #_clear")
 
     def _folder_selected_component_plots(self):
         s = self.settings

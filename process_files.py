@@ -6,7 +6,7 @@ from scripts.calculate_csp import process_records_csp
 from scripts.calculate_features import process_records_features
 
 
-stage = "test"
+stage = "exp"
 # project = "pr_Agency_EBCI"
 # sessions = ["04_03 Artem"]
 
@@ -31,11 +31,11 @@ config_csp = {
     "concat": True,
     "regularization": False,
     "alpha": 0.1,
-    "same_vlim": True,
+    "same_vlim": False,
 }
 
 project = "pr_Feedback_Quasi"
-sessions = ["08ES"]                                                                                       # <<<<<<============================   Ввести имя сессии 
+sessions = ["15PV"]                                                                                       # <<<<<<============================   Ввести имя сессии 
 
 # project = "pr_Agency_EBCI"
 # sessions = ["04_03 Artem"]
@@ -45,10 +45,9 @@ if __name__ == "__main__":
     for session in sessions:
         # CREATE DATASETS
         folder_input = os.path.join(r"data", project, "raw", stage, session)
-        folder_input = r"R:\projects_FEEDBACK_QUASI\data\exp\08ES"                                       # <<<<<<============================   Ввести имя папки
+        folder_input = r"R:\projects_FEEDBACK_QUASI\data\exp\15PV"                                       # <<<<<<============================   Ввести имя папки
 
         records = os.listdir(folder_input)
-        print(folder_input, records)
         records = ["06_train_IM.hdf"]                                                                    # <<<<<<============================   Ввести имя файла
 
         folder_datasets = os.path.join(r"data", project, "trans", stage, session)
@@ -66,7 +65,6 @@ if __name__ == "__main__":
         print("--- csp calculated ---")
 
         # CALCULATE FEATURES
-
         folder_output = os.path.join(r"data", project, "features", "csp", stage, session)
         os.makedirs(folder_output, exist_ok=True)
         process_records_features(folder_datasets, records, folder_output, config)

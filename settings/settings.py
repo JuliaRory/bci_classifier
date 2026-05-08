@@ -9,12 +9,12 @@ class PreprocessingSettings:
     low_freq: int = 5
     high_freq: int = 35
     baseline_ms: int = 500
-    trial_dur_ms: int = 4000   # 4000  #8000
+    trial_dur_ms: int = 8000   # 4000  #8000
     start_shift_ms: int = 1000    # 1000   #0
     end_shift_ms: int = 0
     
-    class1_photo: int = 2
-    class2_photo: int = 3
+    class1_photo: int = 1
+    class2_photo: int = 2
 
 @dataclass
 class CSPSettings:
@@ -25,7 +25,7 @@ class CSPSettings:
     alpha_reg: float = 0.01
 
     average_cov: bool = False 
-    freq_bands: List[object] = field(default_factory=lambda: [(8.0, 12.0), (9, 13), (10, 14), (8, 15)])
+    freq_bands: List[object] = field(default_factory=lambda: [(8, 12), (9, 13), (10, 14), (8, 15)])
 
 
 @dataclass
@@ -37,7 +37,7 @@ class Settings:
     alpha_reg: float = 0.01
 
     average_cov: bool = False 
-    freq_bands: List[object] = field(default_factory=lambda: [(8.0, 12.0), (13.0, 30.0)])
+    freq_bands: List[object] = field(default_factory=lambda: [(8, 12), (13, 30)])
 
     folder_data: str = r"data"
     project: str = "pr_AstroSync"
