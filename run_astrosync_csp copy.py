@@ -34,12 +34,12 @@ config = {
     "low_freq": 5,
     "high_freq": 35,
     "baseline_ms": 500,
-    "trial_dur_ms": 6000,
+    "trial_dur_ms": 4000,
     "start_shift_ms": 1000,
     "end_shift_ms": 0,
     "epoch_len_ms": None,
     "epochs_step_ms": None,
-    "idxs_keys": "1-2",
+    "idxs_keys": "2-3",
 }
 
 config_csp = {
@@ -58,8 +58,8 @@ config_cv = {
     "classifier": "lda",
 }
 
-project = "pr_AstroSync"
-stage = "exp"
+project = "pr_Agency_EBCI"
+stage = "test"
 fair_pipeline_name = "split_before_csp"
 recalculate_csp = False
 top_n_models = 3

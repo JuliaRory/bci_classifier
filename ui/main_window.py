@@ -1034,10 +1034,10 @@ class MainWindow(QMainWindow):
         features = self._build_probability_features(epochs, spatial_filters, band, components)
         classifier = LDA()
         classifier.fit(features, labels)
-        return classifier, spatial_patterns, band, components, features, labels
+        return classifier, spatial_filters, spatial_patterns, band, components, features, labels
 
     def _save_classifier_for_row(self, row, output_path):
-        classifier, spatial_patterns, band, components, _, _ = self._train_classifier_for_row(row)
+        classifier, spatial_filters, _, band, components, _, _ = self._train_classifier_for_row(row)
         config = self._build_preprocess_config()
 
         sos_basic = butter(
@@ -1055,7 +1055,7 @@ class MainWindow(QMainWindow):
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         model_data = {
-            "spatialW": spatial_patterns[:, components].tolist(),
+            "spatialW": spatial_filters[:, components].tolist(),
             "sos_basic": sos_basic.tolist(),
             "sos": sos.tolist(),
             "band": [float(value) for value in band],
@@ -1074,7 +1074,7 @@ class MainWindow(QMainWindow):
         return output_path
 
     def _save_final_classifier_and_probability_plot(self, row, output_path, plot_output_path):
-        classifier, spatial_patterns, band, components, features, labels = self._train_classifier_for_row(row)
+        classifier, spatial_filters, _, band, components, features, labels = self._train_classifier_for_row(row)
         config = self._build_preprocess_config()
 
         sos_basic = butter(
@@ -1092,7 +1092,7 @@ class MainWindow(QMainWindow):
         plot_output_path.parent.mkdir(parents=True, exist_ok=True)
 
         model_data = {
-            "spatialW": spatial_patterns[:, components].tolist(),
+            "spatialW": spatial_filters[:, components].tolist(),
             "sos_basic": sos_basic.tolist(),
             "sos": sos.tolist(),
             "band": [float(value) for value in band],
