@@ -43,7 +43,7 @@ class Settings:
     project: str = "pr_AstroSync"
     stage: str = "test"
     session: str = "05_08 Artem"
-    classifier_output_path_template: str = r"models/{project}/{stage}/{session}/feat{components}_{band}_{record_stem}.json"
+    classifier_output_path_template: str = r"R:\projects_Agency_EBCI\Agency_EBCI\models\test_classifier.json" #r"models/{project}/{stage}/{session}/feat{components}_{band}_{record_stem}.json"
 
     CSP: CSPSettings = field(default_factory=CSPSettings)
     preprocess: PreprocessingSettings = field(default_factory=PreprocessingSettings)
