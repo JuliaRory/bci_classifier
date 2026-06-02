@@ -22,7 +22,7 @@ from sklearn.model_selection import TimeSeriesSplit
 
 from src.analysis.CSP import compute_csp
 from src.analysis.features import get_csp_features
-from src.analysis.preprocessing import bandpass_filter
+from src.analysis.preprocessing import bandpass_filter, read_good_epoch_mask
 from src.analysis.csp_component_scores import get_selected_component_indices
 
 
@@ -208,6 +208,12 @@ def process_record(full_path, folder_output, config, config_csp, config_cv):
         epochs = h5f["epochs"][:]
         labels = h5f["labels"][:].squeeze().astype(int)
         metadata = json.loads(h5f["metadata"][()])
+        good_epoch_mask = read_good_epoch_mask(h5f, len(epochs))
+
+    if not good_epoch_mask.all():
+        print(f"Rejected bad epochs: {(~good_epoch_mask).sum()} / {len(good_epoch_mask)}")
+    epochs = epochs[good_epoch_mask]
+    labels = labels[good_epoch_mask]
 
     folds = build_time_series_folds(
         labels=labels,

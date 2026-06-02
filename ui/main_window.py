@@ -19,7 +19,8 @@ from PyQt5.QtWidgets import (
     QComboBox, QListWidget, QPushButton, QLabel, QGroupBox,
     QRadioButton, QCheckBox, QDoubleSpinBox, QSpinBox, QLineEdit,
     QMessageBox, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView, QSizePolicy, QSplitter, QScrollArea
+    QAbstractItemView, QSizePolicy, QSplitter, QScrollArea, QDialog,
+    QDialogButtonBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
@@ -35,7 +36,7 @@ from src.utils.ui_helpers import *
 from src.utils.layout_utils import create_hbox, create_vbox
 from src.utils.montage_processing import find_ch_idx, get_channel_names, get_topo_positions
 from src.analysis.features import get_csp_features
-from src.analysis.preprocessing import bandpass_filter
+from src.analysis.preprocessing import bandpass_filter, detect_bad_epochs, read_good_epoch_mask
 from src.analysis.csp_component_scores import build_component_assessment, get_selected_component_indices
 from src.visualization.ROC_curve import plot_proba
 from src.visualization.plot_csp_components import plot_10_csp_components
@@ -52,6 +53,176 @@ BAD_CHANNELS = ["FT9", "TP9", "T7", "AF7", "AF8", "FT10", "TP10", "T8"]
 MONTAGE_PATH = r"resources/mks64_standard.ced"
 VIRIDIS_BIG = cm.get_cmap("jet")
 CSP_COLORMAP = "jet" #ListedColormap(VIRIDIS_BIG(np.linspace(0, 1, 15)))
+
+
+class EpochReviewDialog(QDialog):
+    def __init__(self, epochs, labels, detection, initial_bad_mask, channel_names=None, fs=1000, parent=None):
+        super().__init__(parent)
+        self.epochs = np.asarray(epochs)
+        self.labels = np.asarray(labels).reshape(-1)
+        self.detection = detection
+        self.bad_mask = np.asarray(initial_bad_mask, dtype=bool).copy()
+        self.channel_names = list(channel_names or [])
+        self.fs = fs
+
+        self.setWindowTitle("Проверка плохих эпох")
+        self.resize(1100, 720)
+        self._setup_widgets()
+        self._setup_layout()
+        self._populate_table()
+        self._update_summary()
+        if self.table.rowCount() > 0:
+            self.table.selectRow(0)
+
+    def _setup_widgets(self):
+        self.summary_label = QLabel()
+        self.table = QTableWidget()
+        self.table.setColumnCount(9)
+        self.table.setHorizontalHeaderLabels(
+            ["Плохая", "Эпоха", "Метка", "Score", "P2P", "RMS", "Max abs", "Flat %", "Причина"]
+        )
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
+
+        self.figure = Figure(figsize=(7.0, 4.2), dpi=100)
+        self.canvas = FigureCanvas(self.figure)
+        self.button_mark_auto = QPushButton("Автовыбор")
+        self.button_mark_all_good = QPushButton("Все хорошие")
+        self.button_mark_all_bad = QPushButton("Все плохие")
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        self.buttons.button(QDialogButtonBox.Save).setText("Сохранить")
+        self.buttons.button(QDialogButtonBox.Cancel).setText("Отмена")
+
+        self.table.itemChanged.connect(self._on_item_changed)
+        self.table.itemSelectionChanged.connect(self._draw_selected_epoch)
+        self.button_mark_auto.clicked.connect(self._mark_auto)
+        self.button_mark_all_good.clicked.connect(lambda: self._set_all(False))
+        self.button_mark_all_bad.clicked.connect(lambda: self._set_all(True))
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+
+    def _setup_layout(self):
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.summary_label)
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self.table)
+        splitter.addWidget(self.canvas)
+        splitter.setSizes([560, 540])
+        layout.addWidget(splitter, stretch=1)
+        controls = QHBoxLayout()
+        controls.addWidget(self.button_mark_auto)
+        controls.addWidget(self.button_mark_all_good)
+        controls.addWidget(self.button_mark_all_bad)
+        controls.addStretch()
+        controls.addWidget(self.buttons)
+        layout.addLayout(controls)
+
+    def _populate_table(self):
+        metrics = self.detection["metrics"]
+        scores = self.detection["scores"]
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(self.epochs))
+        for row in range(len(self.epochs)):
+            check_item = QTableWidgetItem()
+            check_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+            check_item.setCheckState(Qt.Checked if self.bad_mask[row] else Qt.Unchecked)
+            self.table.setItem(row, 0, check_item)
+
+            values = [
+                row,
+                int(self.labels[row]) if row < len(self.labels) else "",
+                scores[row],
+                metrics["p2p"][row],
+                metrics["rms"][row],
+                metrics["max_abs"][row],
+                metrics["flat_fraction"][row] * 100,
+                metrics["reasons"][row],
+            ]
+            for col, value in enumerate(values, start=1):
+                if isinstance(value, (float, np.floating)):
+                    text = f"{value:.3g}"
+                else:
+                    text = str(value)
+                self.table.setItem(row, col, QTableWidgetItem(text))
+        self.table.resizeColumnsToContents()
+        self.table.blockSignals(False)
+
+    def _on_item_changed(self, item):
+        if item.column() != 0:
+            return
+        self.bad_mask[item.row()] = item.checkState() == Qt.Checked
+        self._update_summary()
+        self._draw_selected_epoch()
+
+    def _set_all(self, is_bad):
+        self.table.blockSignals(True)
+        self.bad_mask[:] = is_bad
+        for row in range(self.table.rowCount()):
+            self.table.item(row, 0).setCheckState(Qt.Checked if is_bad else Qt.Unchecked)
+        self.table.blockSignals(False)
+        self._update_summary()
+        self._draw_selected_epoch()
+
+    def _mark_auto(self):
+        auto_mask = np.asarray(self.detection["bad_mask"], dtype=bool)
+        self.table.blockSignals(True)
+        self.bad_mask = auto_mask.copy()
+        for row in range(self.table.rowCount()):
+            self.table.item(row, 0).setCheckState(Qt.Checked if self.bad_mask[row] else Qt.Unchecked)
+        self.table.blockSignals(False)
+        self._update_summary()
+        self._draw_selected_epoch()
+
+    def _update_summary(self):
+        n_bad = int(self.bad_mask.sum())
+        n_total = len(self.bad_mask)
+        n_good = n_total - n_bad
+        self.summary_label.setText(
+            f"Плохие эпохи: {n_bad} / {n_total}. Хорошие эпохи: {n_good}. "
+            "Отметьте строки для исключения и нажмите Save."
+        )
+
+    def _draw_selected_epoch(self):
+        selected = self.table.selectedItems()
+        if not selected:
+            return
+        row = selected[0].row()
+        if row < 0 or row >= len(self.epochs):
+            return
+
+        epoch = self.epochs[row]
+        n_channels = min(epoch.shape[1], 16)
+        data = epoch[:, :n_channels]
+        channel_scale = np.nanmedian(np.nanstd(data, axis=0))
+        if not np.isfinite(channel_scale) or channel_scale <= np.finfo(float).eps:
+            channel_scale = 1.0
+
+        t = np.arange(epoch.shape[0]) / float(self.fs)
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
+        offsets = np.arange(n_channels)[::-1] * 4.0
+        for ch in range(n_channels):
+            trace = (data[:, ch] - np.nanmedian(data[:, ch])) / channel_scale
+            ax.plot(t, trace + offsets[ch], linewidth=0.8)
+
+        y_labels = [
+            self.channel_names[ch] if ch < len(self.channel_names) else str(ch)
+            for ch in range(n_channels)
+        ]
+        ax.set_yticks(offsets)
+        ax.set_yticklabels(y_labels)
+        state = "BAD" if self.bad_mask[row] else "GOOD"
+        ax.set_title(f"Эпоха {row}. Метка {self.labels[row] if row < len(self.labels) else '-'} . {state}")
+        ax.set_xlabel("Time, s")
+        ax.grid(True, alpha=0.2)
+        self.figure.tight_layout()
+        self.canvas.draw_idle()
+
+    def selected_bad_mask(self):
+        return self.bad_mask.copy()
 
 class MainWindow(QMainWindow):
     """Главное окно приложения"""
@@ -118,12 +289,13 @@ class MainWindow(QMainWindow):
     def widgets_prepross(self):
         s = self.settings.preprocess
         self.spin_box_baseline_ms = create_spin_box(0, 5000, s.baseline_ms)
-        self.spin_box_trial_dur_ms = create_spin_box(0, 5000, s.trial_dur_ms)
+        self.spin_box_trial_dur_ms = create_spin_box(0, 50000, s.trial_dur_ms, step=100)
         self.spin_box_start_shift_ms = create_spin_box(0, 5000, s.start_shift_ms)
         self.spin_box_class1_photo = create_spin_box(1, 3, s.class1_photo)
         self.spin_box_class2_photo = create_spin_box(1, 3, s.class2_photo)
 
         self.button_preprocess = create_button("Обработать")
+        self.button_review_bad_epochs = create_button("Проверить эпохи")
 
     def widgets_csp(self):
         # ===== Группа настроек =====
@@ -196,7 +368,7 @@ class MainWindow(QMainWindow):
         folder_layout.addWidget(QLabel("Файлы в выбранной папке:"))
         folder_layout.addLayout(lists_layout)
         folder_layout.addLayout(layout_preprocess)
-        folder_layout.addWidget(self.button_preprocess)
+        folder_layout.addLayout(create_hbox([self.button_preprocess, self.button_review_bad_epochs]))
         self.folder_group.setLayout(folder_layout)
         
         left_panel.addWidget(self.folder_group)
@@ -283,6 +455,7 @@ class MainWindow(QMainWindow):
         
         # Кнопки
         self.button_preprocess.clicked.connect(self.on_process_file)
+        self.button_review_bad_epochs.clicked.connect(self.on_review_bad_epochs)
         self.button_calculate_csp.clicked.connect(self.on_calc_csp)
         self.button_show_csp_plot.clicked.connect(self.on_show_csp_components_plot)
         self.button_save_classifier.clicked.connect(self.on_save_classifier)
@@ -456,7 +629,7 @@ class MainWindow(QMainWindow):
 
     def _folder_csp_plots_clear(self):
         s = self.settings
-        return os.path.join(r"results", s.project, s.stage, s.session, "CSP_components_clear")
+        return os.path.join(r"results", s.project, s.stage, s.session, "CSP_components") #_clear")
 
     def _folder_selected_component_plots(self):
         s = self.settings
@@ -1018,6 +1191,7 @@ class MainWindow(QMainWindow):
             raise FileNotFoundError("Не найден EPOCHS-файл для выбранной записи.")
 
         record_stem = self._record_stem_from_row(row) or dataset_path.stem[len("EPOCHS_") :]
+        print("record_stem", record_stem)
         matrix_path = self._find_csp_matrix(band, record_stem=record_stem)
         if matrix_path is None:
             raise FileNotFoundError(f"Не найдена CSP matrix для band {band} и record {record_stem}.")
@@ -1025,6 +1199,9 @@ class MainWindow(QMainWindow):
         with File(dataset_path, "r") as h5f:
             epochs = h5f["epochs"][:]
             labels = h5f["labels"][:].squeeze().astype(int)
+            good_epoch_mask = read_good_epoch_mask(h5f, len(epochs))
+        epochs = epochs[good_epoch_mask]
+        labels = labels[good_epoch_mask]
 
         with File(matrix_path, "r") as h5f:
             spatial_filters = h5f["projForward"][:]
@@ -1136,6 +1313,9 @@ class MainWindow(QMainWindow):
         with File(dataset_path, "r") as h5f:
             epochs = h5f["epochs"][:]
             labels = h5f["labels"][:].squeeze().astype(int)
+            good_epoch_mask = read_good_epoch_mask(h5f, len(epochs))
+        epochs = epochs[good_epoch_mask]
+        labels = labels[good_epoch_mask]
 
         with File(matrix_path, "r") as h5f:
             spatial_filters = h5f["projForward"][:]
@@ -1535,6 +1715,113 @@ class MainWindow(QMainWindow):
             "epochs_step_ms": None,
             "idxs_keys": f"{s.class1_photo}-{s.class2_photo}",
         }
+
+    def _selected_epoch_dataset_paths(self):
+        if not self._current_dataset_folder:
+            return []
+        return [
+            Path(self._current_dataset_folder) / item.text()
+            for item in self.dataset_list.selectedItems()
+        ]
+
+    def _epoch_channel_names(self, n_channels):
+        try:
+            labels = list(get_channel_names(MONTAGE_PATH))
+        except Exception:
+            labels = []
+        names = [channel for channel in labels if channel not in BAD_CHANNELS]
+        if len(names) < n_channels:
+            names.extend(str(index) for index in range(len(names), n_channels))
+        return names[:n_channels]
+
+    def _save_bad_epoch_review(self, dataset_path, bad_mask, detection):
+        metrics = detection["metrics"]
+        payload = {
+            "auto_bad_epochs": int(np.asarray(detection["bad_mask"], dtype=bool).sum()),
+            "confirmed_bad_epochs": int(np.asarray(bad_mask, dtype=bool).sum()),
+            "total_epochs": int(len(bad_mask)),
+            "reasons": list(metrics["reasons"]),
+        }
+        datasets = {
+            "bad_epoch_mask": np.asarray(bad_mask, dtype=bool),
+            "epoch_quality_scores": np.asarray(detection["scores"], dtype=float),
+            "epoch_quality_p2p": np.asarray(metrics["p2p"], dtype=float),
+            "epoch_quality_rms": np.asarray(metrics["rms"], dtype=float),
+            "epoch_quality_max_abs": np.asarray(metrics["max_abs"], dtype=float),
+            "epoch_quality_flat_fraction": np.asarray(metrics["flat_fraction"], dtype=float),
+        }
+
+        with File(dataset_path, "r+") as h5f:
+            for name in list(datasets) + ["epoch_quality_metadata"]:
+                if name in h5f:
+                    del h5f[name]
+            for name, values in datasets.items():
+                h5f.create_dataset(name, data=values)
+            h5f.create_dataset("epoch_quality_metadata", data=json.dumps(payload, ensure_ascii=False))
+
+    def _review_epoch_dataset(self, dataset_path):
+        with File(dataset_path, "r") as h5f:
+            epochs = h5f["epochs"][:]
+            labels = h5f["labels"][:].squeeze().astype(int)
+            if "bad_epoch_mask" in h5f:
+                initial_bad_mask = np.asarray(h5f["bad_epoch_mask"][:], dtype=bool)
+            else:
+                initial_bad_mask = None
+
+        detection = detect_bad_epochs(epochs)
+        if initial_bad_mask is None or len(initial_bad_mask) != len(epochs):
+            initial_bad_mask = detection["bad_mask"]
+
+        dialog = EpochReviewDialog(
+            epochs=epochs,
+            labels=labels,
+            detection=detection,
+            initial_bad_mask=initial_bad_mask,
+            channel_names=self._epoch_channel_names(epochs.shape[2]),
+            fs=self.settings.preprocess.Fs,
+            parent=self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return False
+
+        bad_mask = dialog.selected_bad_mask()
+        if bad_mask.all():
+            QMessageBox.warning(
+                self,
+                "Проверка эпох",
+                f"Все эпохи отмечены как плохие: {dataset_path.name}. Маска не сохранена.",
+            )
+            return False
+
+        self._save_bad_epoch_review(dataset_path, bad_mask, detection)
+        print(f"Bad epochs saved -> {dataset_path}: {int(bad_mask.sum())} / {len(bad_mask)}")
+        return True
+
+    def on_review_bad_epochs(self):
+        dataset_paths = self._selected_epoch_dataset_paths()
+        if not dataset_paths:
+            QMessageBox.warning(
+                self,
+                "Проверка эпох",
+                "Сначала выберите хотя бы один EPOCHS-файл в списке обработанных dataset-файлов.",
+            )
+            return
+
+        saved = 0
+        for dataset_path in dataset_paths:
+            if not dataset_path.exists():
+                QMessageBox.warning(self, "Проверка эпох", f"Файл не найден: {dataset_path}")
+                continue
+            try:
+                if self._review_epoch_dataset(dataset_path):
+                    saved += 1
+            except Exception as exc:
+                QMessageBox.critical(self, "Ошибка проверки эпох", f"{dataset_path.name}\n{exc}")
+                raise
+
+        if saved:
+            self.refresh_csp_results()
+            QMessageBox.information(self, "Проверка эпох", f"Сохранена разметка для файлов: {saved}")
 
     def _read_csp_bands(self):
         bands = []

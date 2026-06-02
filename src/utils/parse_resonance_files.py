@@ -160,3 +160,77 @@ def parse_events(
     
 #     return idxs1, idxs2, idxs3
 
+# def parse_events_all(photomark, sfreq=1000,
+#                         black_value=0, white_value=1,
+#                         long_white_min_sec=1.0):
+#     """
+#     Detect 1-, 2-, and 3-blink epochs in a photomark recording.
+
+#     An epoch of type N consists of N short white-black blinks followed by a
+#     long (sustain) white segment; it starts at the first white onset and
+#     ends the sample the sustain turns black.
+
+#     Parameters
+#     ----------
+#     photomark : array-like, 1-D
+#         Raw photomark samples (black = 65535.0, white = 65534.0).
+#     sfreq : float
+#         Sampling frequency in Hz.
+#     black_value, white_value : float
+#         Values coding black/white on the trace.
+#     long_white_min_sec : float
+#         Minimum duration for a white segment to count as the "sustain"
+#         (long) white. Anything between blink-length (~0.1 s) and
+#         sustain-length (≥ 4 s) works; 1.0 s is a safe default.
+
+#     Returns
+#     -------
+#     idxs1, idxs2, idxs3 : np.ndarray, shape (n_epochs, 2), dtype int64
+#         Each row is [start, end] sample indices of an epoch (end exclusive).
+#     """
+#     pm = np.asarray(photomark)
+#     n = pm.size
+#     is_white = (pm == white_value)
+
+#     # Transitions (indices of the first sample AFTER the change)
+#     d = np.diff(is_white.astype(np.int8))
+#     bw = np.flatnonzero(d == 1) + 1   # black → white onsets
+#     wb = np.flatnonzero(d == -1) + 1  # white → black offsets
+
+#     # Assemble (start, end_exclusive) for every white segment,
+#     # handling recordings that begin or end in the white state.
+#     starts = bw.tolist()
+#     ends = wb.tolist()
+#     if is_white[0]:
+#         starts = [0] + starts
+#     if is_white[-1]:
+#         ends = ends + [n]
+#     segs = list(zip(starts, ends))
+
+#     long_min = int(round(long_white_min_sec * sfreq))
+
+#     buckets = {1: [], 2: [], 3: []}
+
+#     i = 0
+#     while i < len(segs):
+#         # Run of consecutive SHORT white segments
+#         j = i
+#         while j < len(segs) and (segs[j][1] - segs[j][0]) < long_min:
+#             j += 1
+#         short_count = j - i
+
+#         # j now points to a LONG white segment (or past the end)
+#         if j < len(segs) and short_count in (1, 2, 3):
+#             epoch_start = segs[i][0]
+#             epoch_end = segs[j][1]          # first black sample after sustain
+#             buckets[short_count].append((epoch_start, epoch_end))
+#             i = j + 1                       # continue after the sustain
+#         else:
+#             # Not a valid pattern — skip this segment (or the whole run)
+#             i = max(j, i + 1)
+
+#     def _to_arr(lst):
+#         return (np.array(lst, dtype=np.int64)
+#                 if lst else np.empty((0, 2), dtype=np.int64))
+
+#     return _to_arr(buckets[1]), _to_arr(buckets[2]), _to_arr(buckets[3])

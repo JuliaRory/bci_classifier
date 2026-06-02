@@ -15,7 +15,7 @@ newcmp = "jet" #ListedColormap(viridisBig(np.linspace(0, 1, 15)))
 def plot_topoplot(X, positions, vmin=None, vmax=None, ch_labels=None, axes=None):
         im, cn = plot_topomap(X, positions,  image_interp='cubic', ch_type='eeg', names =ch_labels,
                 size=5, show=False, contours=4, sphere=0.5, 
-                cmap=newcmp, extrapolate='head', axes=axes, vlim=[vmin, vmax])
+                cmap=newcmp, extrapolate='head', axes=axes) #, vlim=[vmin, vmax])
         return im
 
 def plot_components(projForward, xy, ch_labels, gs=None, row_ind=None, idxs=None):
@@ -57,7 +57,7 @@ def plot_eigenvalues(eigvals, ax):
 
         
 def plot_10_csp_components(eigenvals, projForward, xy, component_scores=None, same_vlim=True):
-        fig = plt.figure(figsize=(22, 6))
+        fig = plt.figure(figsize=(22, 8))
         n = 6
         gs = gridspec.GridSpec(2, n, height_ratios=[1, 1], width_ratios=[2]+[1]*(n-1), wspace=0.05)
         
@@ -75,7 +75,7 @@ def plot_10_csp_components(eigenvals, projForward, xy, component_scores=None, sa
                         axes=ax,
                         show=False,
                         contours=0,
-                        sphere=0.6,
+                        sphere=0.5,
                         cmap=newcmp,
                         extrapolate='head',
                 )
@@ -91,10 +91,10 @@ def plot_10_csp_components(eigenvals, projForward, xy, component_scores=None, sa
                         )
                 ax.set_title(title)
 
-        cbar = fig.colorbar(im, ax=fig.axes)
-        cbar.set_ticks([vmin, vmax])
-        cbar.set_ticklabels([f"{vmin:.2f}", f"{vmax:.2f}"])
-        cbar.ax.yaxis.set_tick_params(labelsize=10)
+        #cbar = fig.colorbar(im, ax=fig.axes)
+        #cbar.set_ticks([vmin, vmax])
+        #cbar.set_ticklabels([f"{vmin:.2f}", f"{vmax:.2f}"])
+        #cbar.ax.yaxis.set_tick_params(labelsize=10)
         return fig
 
 

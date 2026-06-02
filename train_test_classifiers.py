@@ -25,7 +25,7 @@ config = {
 }
 
 config_csp = {
-    "bands": [[8, 12]], #, [9, 13], [10, 14], [8, 15]
+    "bands": [[9, 13]], #, [9, 13], [10, 14], [8, 15]
     "robust": True,
     "concat": True,
     "regularization": False,
@@ -33,13 +33,13 @@ config_csp = {
 }
 
 config_clf = {
-    "sel_comps": [0, 1, -1, -2],
+    "sel_comps": [1, 2, -1, -2],
     "n_feat": [2], 
     "classifier": "lda"
 }
 
 project = "pr_Feedback_Quasi"
-sessions = ["Evgeny"]
+sessions = ["02AY"]
 
 if __name__ == "__main__":
 

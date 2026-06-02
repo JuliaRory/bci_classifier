@@ -25,7 +25,7 @@ class CSPSettings:
     alpha_reg: float = 0.01
 
     average_cov: bool = False 
-    freq_bands: List[object] = field(default_factory=lambda: [(8.0, 12.0), (9, 13), (10, 14), (8, 15)])
+    freq_bands: List[object] = field(default_factory=lambda: [(8, 12), (9, 13), (10, 14), (8, 15)])
 
 
 @dataclass
@@ -37,13 +37,13 @@ class Settings:
     alpha_reg: float = 0.01
 
     average_cov: bool = False 
-    freq_bands: List[object] = field(default_factory=lambda: [(8.0, 12.0), (13.0, 30.0)])
+    freq_bands: List[object] = field(default_factory=lambda: [(8, 12), (13, 30)])
 
     folder_data: str = r"data"
     project: str = "pr_AstroSync"
-    stage: str = "exp"
-    session: str = "04_03 Artem"
-    classifier_output_path_template: str = r"models/{project}/{stage}/{session}/feat{components}_{band}_{record_stem}.json"
+    stage: str = "test"
+    session: str = "05_08 Artem"
+    classifier_output_path_template: str = r"R:\projects_Agency_EBCI\Agency_EBCI\models\test_classifier.json" #r"models/{project}/{stage}/{session}/feat{components}_{band}_{record_stem}.json"
 
     CSP: CSPSettings = field(default_factory=CSPSettings)
     preprocess: PreprocessingSettings = field(default_factory=PreprocessingSettings)
