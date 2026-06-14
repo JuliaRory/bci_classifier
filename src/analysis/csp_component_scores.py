@@ -68,7 +68,7 @@ def build_component_assessment(proj_inverse, evals):
     physio_boost_ipsi_contrast = 1 + contrast_ipsi
 
     physio_boost_contra = physio_boost_locality
-    physio_boost_ipsi = physio_boost_locality * physio_boost_ipsi_contrast
+    physio_boost_ipsi = physio_boost_locality # * physio_boost_ipsi_contrast
     physio_boost = physio_boost_contra + physio_boost_ipsi
 
     final_score_contra_basic = score_contra * eigscore

@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.cross_validated_test import process_record
+from settings.settings import Settings
 
 
 COMPONENT_GROUP_TEMPLATES = [
@@ -26,6 +27,7 @@ COMPONENT_SCORE_ALIASES = {
     "contra": ["final_score_contra"],
     "ipsi": ["final_score_ipsi"],
 }
+BRIER_SCORE_PENALTY_L = float(getattr(Settings(), "brier_score_penalty_L", 5.0))
 
 
 def parse_tuple(value):
@@ -131,7 +133,10 @@ def summarize_cv_scores(cv_scores_path, selected_pairs):
         )
     )
     summary["components"] = summary["sel_comp"].apply(lambda value: list(parse_tuple(value)))
-    summary["ranking_score"] = summary["component_assessment_score"] * (2 - summary["brier score"])
+    brier_score = pd.to_numeric(summary["brier score"], errors="coerce")
+    summary["ranking_score"] = summary["component_assessment_score"] * (
+        1 + 1 / (1 + BRIER_SCORE_PENALTY_L * brier_score)
+    )
 
     return summary.sort_values(
         ["ranking_score"],

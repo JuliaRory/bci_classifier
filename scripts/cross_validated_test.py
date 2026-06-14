@@ -19,6 +19,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import TimeSeriesSplit
+from scipy.signal import welch
 
 from src.analysis.CSP import compute_csp
 from src.analysis.features import get_csp_features
@@ -65,6 +66,46 @@ def project_epochs_to_features(epochs, spatial_filters):
     selected_components = get_selected_component_indices(spatial_filters.shape[1])
     epochs_csp = np.array([epoch @ spatial_filters[:, selected_components] for epoch in epochs])
     return get_csp_features(epochs_csp)
+
+
+def project_epochs_to_spectral_power_features(epochs, spatial_filters, config_cv, fs):
+    selected_components = get_selected_component_indices(spatial_filters.shape[1])
+    epochs_csp = np.array([epoch @ spatial_filters[:, selected_components] for epoch in epochs])
+    nperseg = min(int(2 * fs), epochs_csp.shape[1])
+    freqs, psd = welch(epochs_csp, fs=fs, nperseg=nperseg, axis=1)
+    feature_freqs = [float(freq) for freq in config_cv.get("spectral_freqs", [])]
+    if not feature_freqs:
+        raise ValueError("spectral_freqs must be set for csp_spectral_power features.")
+    if any(freq > float(freqs[-1]) for freq in feature_freqs):
+        raise ValueError(f"spectral_freqs must be <= {float(freqs[-1]):.1f} Hz.")
+
+    freq_indices = [int(np.argmin(np.abs(freqs - freq))) for freq in feature_freqs]
+    features = psd[:, freq_indices, :]
+    features = np.transpose(features, (0, 2, 1))
+    return features.reshape(features.shape[0], -1)
+
+
+def project_epochs_to_classifier_features(epochs, spatial_filters, config_cv, fs):
+    if config_cv.get("features_type") == "csp_spectral_power":
+        return project_epochs_to_spectral_power_features(epochs, spatial_filters, config_cv, fs)
+    return project_epochs_to_features(epochs, spatial_filters)
+
+
+def select_feature_columns(features, sel_comp, config_cv):
+    if config_cv.get("features_type") != "csp_spectral_power":
+        return features[:, sel_comp]
+
+    n_freqs = len(config_cv.get("spectral_freqs", []))
+    if n_freqs <= 0:
+        raise ValueError("spectral_freqs must be set for csp_spectral_power features.")
+    n_components = features.shape[1] // n_freqs
+    columns = []
+    for component in sel_comp:
+        component_index = component if component >= 0 else n_components + component
+        if component_index < 0 or component_index >= n_components:
+            raise IndexError(f"component index {component} is out of bounds for {n_components} components")
+        columns.extend(range(component_index * n_freqs, (component_index + 1) * n_freqs))
+    return features[:, columns]
 
 
 def build_time_series_folds(labels, n_splits, test_size):
@@ -140,21 +181,21 @@ def fit_and_score_classifier(X_train, y_train, X_test, y_test, config_cv):
     return calculate_metrics(y_test, y_pred, y_proba)
 
 
-def evaluate_pipeline_global_csp(epochs_band, epochs_band_cropped, labels, folds, config_csp, config_cv):
+def evaluate_pipeline_global_csp(epochs_band, epochs_features, epochs_band_cropped, labels, folds, config_csp, config_cv, fs):
     spatial_filters, _, _ = compute_csp(
         epochs_band_cropped[labels == 0],
         epochs_band_cropped[labels == 1],
         config_csp,
     )
-    all_features = project_epochs_to_features(epochs_band, spatial_filters)
+    all_features = project_epochs_to_classifier_features(epochs_features, spatial_filters, config_cv, fs)
 
     rows = []
     for fold_idx, (train_idx, test_idx) in enumerate(folds, start=1):
         for sel_comp in get_feature_groups(config_cv):
             metrics = fit_and_score_classifier(
-                all_features[train_idx][:, sel_comp],
+                select_feature_columns(all_features[train_idx], sel_comp, config_cv),
                 labels[train_idx],
-                all_features[test_idx][:, sel_comp],
+                select_feature_columns(all_features[test_idx], sel_comp, config_cv),
                 labels[test_idx],
                 config_cv,
             )
@@ -169,7 +210,7 @@ def evaluate_pipeline_global_csp(epochs_band, epochs_band_cropped, labels, folds
     return rows
 
 
-def evaluate_pipeline_split_first(epochs_band, epochs_band_cropped, labels, folds, config_csp, config_cv):
+def evaluate_pipeline_split_first(epochs_band, epochs_features, epochs_band_cropped, labels, folds, config_csp, config_cv, fs):
     rows = []
     for fold_idx, (train_idx, test_idx) in enumerate(folds, start=1):
         train_epochs_cropped = epochs_band_cropped[train_idx]
@@ -181,14 +222,14 @@ def evaluate_pipeline_split_first(epochs_band, epochs_band_cropped, labels, fold
             config_csp,
         )
 
-        train_features = project_epochs_to_features(epochs_band[train_idx], spatial_filters)
-        test_features = project_epochs_to_features(epochs_band[test_idx], spatial_filters)
+        train_features = project_epochs_to_classifier_features(epochs_features[train_idx], spatial_filters, config_cv, fs)
+        test_features = project_epochs_to_classifier_features(epochs_features[test_idx], spatial_filters, config_cv, fs)
 
         for sel_comp in get_feature_groups(config_cv):
             metrics = fit_and_score_classifier(
-                train_features[:, sel_comp],
+                select_feature_columns(train_features, sel_comp, config_cv),
                 train_labels,
-                test_features[:, sel_comp],
+                select_feature_columns(test_features, sel_comp, config_cv),
                 labels[test_idx],
                 config_cv,
             )
@@ -222,9 +263,16 @@ def process_record(full_path, folder_output, config, config_csp, config_cv):
     )
 
     rows = []
+    features_type = config_cv.get("features_type", "csp")
+    spectral_freqs = [float(freq) for freq in config_cv.get("spectral_freqs", [])]
     for band in config_csp["bands"]:
         epochs_band = bandpass_epochs(epochs, fs=config["Fs"], band=band)
         epochs_band_cropped = crop_epochs_for_csp(epochs_band, config)
+        if features_type == "csp_spectral_power":
+            high = min(40, config["Fs"] / 2 - 1)
+            epochs_features = bandpass_epochs(epochs, fs=config["Fs"], band=[1, high])
+        else:
+            epochs_features = epochs_band
 
         rows.extend(
             {
@@ -233,11 +281,13 @@ def process_record(full_path, folder_output, config, config_csp, config_cv):
             }
             for row in evaluate_pipeline_global_csp(
                 epochs_band=epochs_band,
+                epochs_features=epochs_features,
                 epochs_band_cropped=epochs_band_cropped,
                 labels=labels,
                 folds=folds,
                 config_csp=config_csp,
                 config_cv=config_cv,
+                fs=config["Fs"],
             )
         )
 
@@ -248,11 +298,13 @@ def process_record(full_path, folder_output, config, config_csp, config_cv):
             }
             for row in evaluate_pipeline_split_first(
                 epochs_band=epochs_band,
+                epochs_features=epochs_features,
                 epochs_band_cropped=epochs_band_cropped,
                 labels=labels,
                 folds=folds,
                 config_csp=config_csp,
                 config_cv=config_cv,
+                fs=config["Fs"],
             )
         )
 
@@ -260,9 +312,22 @@ def process_record(full_path, folder_output, config, config_csp, config_cv):
     df_scores.insert(0, "session", Path(full_path).parts[-2])
     df_scores.insert(1, "record", Path(full_path).name[len("EPOCHS_") :])
     df_scores.insert(2, "classifier", config_cv["classifier"])
+    df_scores.insert(3, "features_type", features_type)
+    df_scores.insert(4, "spectral_freqs", json.dumps(spectral_freqs))
     df_scores["fs"] = metadata["Fs"]
 
     output_filename = os.path.join(folder_output, Path(full_path).stem[len("EPOCHS_") :] + ".xlsx")
+    if os.path.exists(output_filename):
+        existing = pd.read_excel(output_filename)
+        if "features_type" not in existing.columns:
+            existing["features_type"] = "csp"
+        if "spectral_freqs" not in existing.columns:
+            existing["spectral_freqs"] = "[]"
+        replace_mask = existing["features_type"].astype(str) == str(features_type)
+        if features_type == "csp_spectral_power":
+            replace_mask &= existing["spectral_freqs"].astype(str) == json.dumps(spectral_freqs)
+        existing = existing.loc[~replace_mask].copy()
+        df_scores = pd.concat([existing, df_scores], ignore_index=True, sort=False)
     df_scores.to_excel(output_filename, index=False)
     print("output file -> ", output_filename)
 
