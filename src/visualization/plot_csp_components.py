@@ -18,16 +18,16 @@ def plot_topoplot(X, positions, vmin=None, vmax=None, ch_labels=None, axes=None)
                 cmap=newcmp, extrapolate='head', axes=axes) #, vlim=[vmin, vmax])
         return im
 
-def plot_components(projForward, xy, ch_labels, gs=None, row_ind=None, idxs=None):
+def plot_components(spatial_patterns, xy, ch_labels, gs=None, row_ind=None, idxs=None):
         ims = []
         if idxs is None:
                 idxs = [0, 1, 2, 3, -4, -3, -2, -1]
-        vmin, vmax = np.min(projForward[:, idxs]), np.max(projForward[:, idxs])
+        vmin, vmax = np.min(spatial_patterns[:, idxs]), np.max(spatial_patterns[:, idxs])
         vmin, vmax = -max(abs(vmin), abs(vmax)), max(abs(vmin), abs(vmax))
         
         for i, idx in enumerate(idxs):
                 ax_map = plt.subplot(gs[row_ind, i+1])
-                im = plot_topoplot(projForward[:, idx], xy, axes=ax_map, 
+                im = plot_topoplot(spatial_patterns[:, idx], xy, axes=ax_map, 
                         vmin=vmin, vmax=vmax)
                 comp_number = idx if idx >= 0 else len(ch_labels)+idx
                 ax_map.set_title(f"CSP #{comp_number+1}")
@@ -56,7 +56,7 @@ def plot_eigenvalues(eigvals, ax):
                 print(e)
 
         
-def plot_10_csp_components(eigenvals, projForward, xy, component_scores=None, same_vlim=True):
+def plot_10_csp_components(eigenvals, spatial_patterns, xy, component_scores=None, same_vlim=True):
         fig = plt.figure(figsize=(22, 8))
         n = 6
         gs = gridspec.GridSpec(2, n, height_ratios=[1, 1], width_ratios=[2]+[1]*(n-1), wspace=0.05)
@@ -64,9 +64,9 @@ def plot_10_csp_components(eigenvals, projForward, xy, component_scores=None, sa
         plot_eigenvalues(eigenvals, plt.subplot(gs[:, 0]))
 
         idxs = [0, 1, 2, 3, 4, -5, -4, -3, -2, -1]
-        n_components = projForward.shape[1]
+        n_components = spatial_patterns.shape[1]
         titles = [idx if idx >= 0 else n_components + idx for idx in idxs]
-        vmin, vmax = np.min(projForward[:, idxs]), np.max(projForward[:, idxs])
+        vmin, vmax = np.min(spatial_patterns[:, idxs]), np.max(spatial_patterns[:, idxs])
         vmin, vmax = -max(abs(vmin), abs(vmax)), max(abs(vmin), abs(vmax))
         for i, ch in enumerate(idxs):
                 ax = plt.subplot(gs[int(ch<0), abs(ch)+1*int(ch>=0)])
@@ -81,7 +81,7 @@ def plot_10_csp_components(eigenvals, projForward, xy, component_scores=None, sa
                 )
                 if same_vlim:
                         topomap_kwargs["vlim"] = (vmin, vmax)
-                im, _ = plot_topomap(projForward[:, ch], xy, **topomap_kwargs) #, names=ch_labels)
+                im, _ = plot_topomap(spatial_patterns[:, ch], xy, **topomap_kwargs) #, names=ch_labels)
                 title = f'# {titles[i]}'
                 if component_scores is not None:
                         title = (

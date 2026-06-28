@@ -83,11 +83,11 @@ def redraw_record(folder_csp, subject_name, record_name):
             continue
 
         with File(matrix_path, "r") as h5f:
-            proj_inverse = h5f["projInverse"][:]
+            spatial_patterns = h5f["projForward"][:]
             evals = h5f["evals"][:]
 
-        component_scores = build_component_assessment(proj_inverse, evals)
-        fig = plot_10_csp_components(abs(evals), proj_inverse, XY, component_scores=component_scores)
+        component_scores = build_component_assessment(spatial_patterns, evals)
+        fig = plot_10_csp_components(abs(evals), spatial_patterns, XY, component_scores=component_scores)
 
         robust = "robust" if config_csp["robust"] else "standard"
         reg = "reg" + str(config_csp["alpha"]) if config_csp["regularization"] else ""

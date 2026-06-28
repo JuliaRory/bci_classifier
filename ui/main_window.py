@@ -1337,8 +1337,8 @@ class MainWindow(QMainWindow):
         labels = labels[good_epoch_mask]
 
         with File(matrix_path, "r") as h5f:
-            spatial_filters = h5f["projForward"][:]
-            spatial_patterns = h5f["projInverse"][:]
+            spatial_patterns = h5f["projForward"][:]
+            spatial_filters = h5f["projInverse"][:]
 
         features, feature_type, spectral_freqs = self._build_classifier_features(epochs, spatial_filters, band, components)
         classifier = LDA()
@@ -1459,7 +1459,7 @@ class MainWindow(QMainWindow):
         labels = labels[good_epoch_mask]
 
         with File(matrix_path, "r") as h5f:
-            spatial_filters = h5f["projForward"][:]
+            spatial_filters = h5f["projInverse"][:]
 
         features, feature_type, _ = self._build_classifier_features(epochs, spatial_filters, band, components)
         classifier = LDA()
@@ -1512,7 +1512,7 @@ class MainWindow(QMainWindow):
         labels = labels[good_epoch_mask]
 
         with File(matrix_path, "r") as h5f:
-            spatial_filters = h5f["projForward"][:]
+            spatial_filters = h5f["projInverse"][:]
 
         epochs_csp = self._project_epochs_for_spectral_features(epochs, spatial_filters, components)
         freqs, psd = self._calculate_component_psd(epochs_csp)
@@ -1575,7 +1575,7 @@ class MainWindow(QMainWindow):
 
         try:
             with File(matrix_path, "r") as h5f:
-                patterns = h5f["projInverse"][:]
+                patterns = h5f["projForward"][:]
                 evals = h5f["evals"][:]
         except Exception as exc:
             self._draw_empty_best_components_plot(f"Could not load CSP matrix:\n{exc}")
@@ -2232,7 +2232,7 @@ class MainWindow(QMainWindow):
         for matrix_path in sorted(folder_csp.glob("MATRIX_*.hdf")):
             try:
                 with File(matrix_path, "r") as h5f:
-                    proj_inverse = h5f["projInverse"][:]
+                    spatial_patterns = h5f["projForward"][:]
                     evals = h5f["evals"][:]
                     metadata_raw = h5f["metadata_csp"][()] if "metadata_csp" in h5f else None
             except Exception as exc:
@@ -2249,7 +2249,7 @@ class MainWindow(QMainWindow):
                     metadata_csp = {}
 
             band = metadata_csp.get("band")
-            component_scores = build_component_assessment(proj_inverse, evals)
+            component_scores = build_component_assessment(spatial_patterns, evals)
             filename = matrix_path.name[len("MATRIX_") :]
             if filename.endswith(".hdf"):
                 filename = filename[:-4] + ".png"
@@ -2261,7 +2261,7 @@ class MainWindow(QMainWindow):
             for output_path, same_vlim in outputs:
                 fig = plot_10_csp_components(
                     abs(evals),
-                    proj_inverse,
+                    spatial_patterns,
                     xy,
                     component_scores=component_scores,
                     same_vlim=same_vlim,

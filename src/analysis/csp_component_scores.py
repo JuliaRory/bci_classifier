@@ -40,10 +40,10 @@ def calculate_weighted_score(patterns, weights):
     return patterns @ w
 
 
-def build_component_assessment(proj_inverse, evals):
-    n_components = proj_inverse.shape[1]
+def build_component_assessment(spatial_patterns, evals):
+    n_components = spatial_patterns.shape[1]
     selected_components = get_selected_component_indices(n_components)
-    patterns = np_abs(proj_inverse.T[selected_components, :])
+    patterns = np_abs(spatial_patterns.T[selected_components, :])
     eigscore = calculate_eigenscore(evals[selected_components])
 
     score = calculate_weighted_score(patterns, WEIGHTS)
@@ -112,7 +112,7 @@ def extract_record_name(filename, metadata_csp):
     return filename[filename.find(reg_alpha) + len(reg_alpha) + 1 :]
 
 
-def build_component_assessment_table(proj_inverse, evals, metadata_csp, session, filename):
+def build_component_assessment_table(spatial_patterns, evals, metadata_csp, session, filename):
     base_row = {
         "session": session,
         "record": extract_record_name(filename, metadata_csp),
@@ -122,7 +122,7 @@ def build_component_assessment_table(proj_inverse, evals, metadata_csp, session,
             continue
         base_row[key] = value
 
-    scores = build_component_assessment(proj_inverse, evals)
+    scores = build_component_assessment(spatial_patterns, evals)
     rows = []
     for i in range(len(scores["n_comp"])):
         row = base_row.copy()

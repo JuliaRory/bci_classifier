@@ -105,12 +105,12 @@ def redraw_existing_csp_outputs(folder_csp, subject_name, record_name):
     for band in config_csp["bands"]:
         matrix_path = Path(folder_csp) / get_matrix_filename(record_name, band)
         with File(matrix_path, "r") as h5f:
-            proj_inverse = h5f["projInverse"][:]
+            spatial_patterns = h5f["projForward"][:]
             evals = h5f["evals"][:]
 
         metadata_csp = {**config_csp, "band": band}
         assessment_df = build_component_assessment_table(
-            proj_inverse=proj_inverse,
+            spatial_patterns=spatial_patterns,
             evals=evals,
             metadata_csp=metadata_csp,
             session=subject_name,
@@ -118,9 +118,9 @@ def redraw_existing_csp_outputs(folder_csp, subject_name, record_name):
         )
         save_component_assessment_table(assessment_df, str(folder_csp), matrix_path.name)
 
-        component_scores = build_component_assessment(proj_inverse, evals)
+        component_scores = build_component_assessment(spatial_patterns, evals)
         plot_path = get_plot_filename(subject_name, record_name, band)
-        plot_10_comp(evals, proj_inverse, band, str(plot_path), config_csp, component_scores)
+        plot_10_comp(evals, spatial_patterns, band, str(plot_path), config_csp, component_scores)
         print("reused CSP matrix -> ", matrix_path)
 
 
@@ -328,7 +328,7 @@ def train_and_save_final_models(folder_epochs, folder_csp, folder_cv, subject_na
         matrix_path = Path(folder_csp) / get_matrix_filename(record_name, band)
 
         with File(matrix_path, "r") as h5f:
-            spatial_filters = h5f["projForward"][:]
+            spatial_filters = h5f["projInverse"][:]
 
         features = build_model_features(epochs, spatial_filters, band, components)
         model = train_final_classifier(features, labels)

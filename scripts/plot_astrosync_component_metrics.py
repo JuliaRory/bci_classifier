@@ -20,10 +20,10 @@ def load_component_metrics(folder_root):
     rows = []
     for matrix_path in sorted(Path(folder_root).rglob("MATRIX_*.hdf")):
         with File(matrix_path, "r") as h5f:
-            proj_inverse = h5f["projInverse"][:]
+            spatial_patterns = h5f["projForward"][:]
             evals = h5f["evals"][:]
 
-        scores = build_component_assessment(proj_inverse, evals)
+        scores = build_component_assessment(spatial_patterns, evals)
         for i in range(len(scores["n_comp"])):
             rows.append(
                 {

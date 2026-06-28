@@ -219,7 +219,7 @@ def save_components_plot(matrix_path, band, components, output_path, xy, row):
     from mne.viz import plot_topomap
 
     with File(matrix_path, "r") as h5f:
-        patterns = h5f["projInverse"][:]
+        patterns = h5f["projForward"][:]
         evals = h5f["evals"][:]
 
     n_components = patterns.shape[1]
@@ -321,7 +321,7 @@ def save_probability_plot(epochs_path, matrix_path, row, band, components, outpu
         labels = h5f["labels"][:].squeeze().astype(int)
 
     with File(matrix_path, "r") as h5f:
-        spatial_filters = h5f["projForward"][:]
+        spatial_filters = h5f["projInverse"][:]
 
     features = build_probability_features(epochs, spatial_filters, band, components, fs)
     classifier = LDA()

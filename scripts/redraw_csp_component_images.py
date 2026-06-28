@@ -73,15 +73,15 @@ def save_component_plot(matrix_path, output_path, xy, same_vlim):
     from src.visualization.plot_csp_components import plot_10_csp_components
 
     with File(matrix_path, "r") as h5f:
-        proj_inverse = h5f["projInverse"][:]
+        spatial_patterns = h5f["projForward"][:]
         evals = h5f["evals"][:]
         metadata_csp = read_json_dataset(h5f, "metadata_csp")
 
     band = metadata_csp.get("band") or fallback_band_from_matrix_name(matrix_path)
-    component_scores = build_component_assessment(proj_inverse, evals)
+    component_scores = build_component_assessment(spatial_patterns, evals)
     fig = plot_10_csp_components(
         abs(evals),
-        proj_inverse,
+        spatial_patterns,
         xy,
         component_scores=component_scores,
         same_vlim=same_vlim,

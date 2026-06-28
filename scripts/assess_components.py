@@ -20,14 +20,14 @@ labels_good =  [ch for ch in labels if not(ch in bad_channels)]        # labels
 
 def process_record(full_path, folder_output, config):
     with File(full_path, "r") as h5f:
-        projInverse = h5f["projInverse"][:]     # [n_channels, n_components]
+        spatial_patterns = h5f["projForward"][:]     # [n_channels, n_components]
         evals = h5f["evals"][:]
         metadata_csp = h5f['metadata_csp'][()]
 
     metadata_csp = json.loads(metadata_csp)
     filename = Path(full_path).parts[-1]
     df_results = build_component_assessment_table(
-        proj_inverse=projInverse,
+        spatial_patterns=spatial_patterns,
         evals=evals,
         metadata_csp=metadata_csp,
         session=Path(full_path).parts[-2],

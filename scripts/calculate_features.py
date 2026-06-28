@@ -37,16 +37,15 @@ def process_record(full_path, folder_output, config):
     for filename in filenames:
         path = os.path.join(folder_output, filename)
         with File(path, "r") as h5f:
-            # projInverse = h5f["projInverse"][:]     # [n_channels, n_components]
-            projForward = h5f["projForward"][:]
+            spatial_filters = h5f["projInverse"][:]
             # evals = h5f["evals"][:]
             metadata = h5f['metadata'][()]
             metadata_csp = h5f['metadata_csp'][()]
-        ch_len = projForward.shape[0]
+        ch_len = spatial_filters.shape[1]
         sel_comp = [0, 1, 2, 3, 4, ch_len-5, ch_len-4, ch_len-3, ch_len-2, ch_len-1]
 
         epochs_csp = array([
-            ep @ projForward[:, sel_comp] for ep in epochs
+            ep @ spatial_filters[:, sel_comp] for ep in epochs
         ])
 
         features = get_csp_features(epochs_csp)

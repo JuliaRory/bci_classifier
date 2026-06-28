@@ -22,23 +22,22 @@ EEG_CHANNELS =  [ch for ch in labels if not(ch in bad_channels)]
 
 def process_record(full_path, folder_output, config):
     with File(full_path, "r") as h5f:
-        projInverse = h5f["projInverse"][:]     # [n_channels, n_components]
-        # projForward = h5f["projForward"][:]
+        spatial_patterns = h5f["projForward"][:]     # [n_channels, n_components]
         evals = h5f["evals"][:]
         metadata_csp = h5f['metadata_csp'][()]
-    ch_len = projInverse.shape[0]
+    ch_len = spatial_patterns.shape[1]
     sel_comp = [0, 1, 2, 3, 4, ch_len-5, ch_len-4, ch_len-3, ch_len-2, ch_len-1]
 
-    projInverse = projInverse.T                 # (n_components, n_channels)
+    spatial_patterns = spatial_patterns.T       # (n_components, n_channels)
     scores = score_spatial_patterns_physio(
-        patterns=projInverse[sel_comp, :],
+        patterns=spatial_patterns[sel_comp, :],
         ch_names=EEG_CHANNELS, 
         roi_channels=["FC1", "FC3", "FC5", "C1", "C3", "C5", "CP1", "CP3", "CP5"]
     )
     
     metadata_csp = json.loads(metadata_csp)
     filename = Path(full_path).parts[-1]
-    reg_alpha = f"reg{metadata_csp["alpha"]}"
+    reg_alpha = f"reg{metadata_csp['alpha']}"
     record = filename[filename.find(reg_alpha)+len(reg_alpha) + 1: ]
     
     results = {

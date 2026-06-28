@@ -189,7 +189,7 @@ def save_best_models(full_path, folder_csp, folder_models, top_pairs):
         matrix_path = find_matrix_path(folder_csp, record_file, band)
 
         with File(matrix_path, "r") as h5f:
-            spatial_filters = h5f["projForward"][:]
+            spatial_filters = h5f["projInverse"][:]
 
         features = build_model_features(
             epochs=epochs,

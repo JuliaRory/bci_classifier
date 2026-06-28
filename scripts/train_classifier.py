@@ -34,11 +34,11 @@ def generate_groups(nums=[0, 1, -1, -2], n_features=2):
 def get_W(folder, info):
     filename = os.path.join(folder, "MATRIX_" + info + ".hdf")
     with File(filename, "r") as h5f:
-        projForward = h5f["projForward"][:]
-    return projForward
+        spatial_filters = h5f["projInverse"][:]
+    return spatial_filters
 
 def save_classifier(folder, folder_output, classifier, sel_comp, info):
-    projForward = get_W(folder, info)
+    spatial_filters = get_W(folder, info)
 
     # Веса LDA (для признаков, полученных из CSP)
     w_lda = classifier.coef_[0]  # вектор [компоненты] или [признаки]
@@ -50,7 +50,7 @@ def save_classifier(folder, folder_output, classifier, sel_comp, info):
     sos = butter(4, band, btype="bandpass", output='sos', fs=1000)
 
     classifier_data = {
-        'spatialW': projForward[:, sel_comp].tolist(),  # веса csp фильтра
+        'spatialW': spatial_filters[:, sel_comp].tolist(),  # веса csp фильтра
         'sos_basic': sos_basic.tolist(),  # коэффициенты SOS фильтра [секции × 6]
         'sos': sos.tolist(),  # коэффициенты SOS фильтра [секции × 6]
         'features_type': "csp",  # тип признаков
