@@ -81,6 +81,9 @@ def process_record(full_path, folder_output, config, config_csp):
             h5f.create_dataset("projForward", data=spatial_patterns)
             h5f.create_dataset("projInverse", data=spatial_filters)
             h5f.create_dataset("evals", data=evals)
+            h5f.attrs["csp_matrix_semantics"] = "projForward=spatial_patterns;projInverse=spatial_filters"
+            h5f.attrs["projForward_kind"] = "spatial_patterns"
+            h5f.attrs["projInverse_kind"] = "spatial_filters"
 
             config_str = json.dumps(config)
             h5f.create_dataset("metadata", data=config_str)

@@ -307,6 +307,12 @@ class MainWindow(QMainWindow):
         self.checkbox_regul = create_check_box(s.use_regularization, text="Использовать регуляризацию")
         self.spin_box_regul_alpha = create_spin_box(0.001, 1.0, s.alpha_reg, data_type="float")
         self.spin_box_regul_alpha.setEnabled(self.checkbox_regul.isChecked())
+        self.combo_component_assessment = QComboBox()
+        self.combo_component_assessment.addItem("Legacy score", "legacy")
+        self.combo_component_assessment.addItem("Dipole GOF score", "dipole")
+        assessment_algorithm = getattr(s, "component_assessment_algorithm", "legacy")
+        assessment_index = self.combo_component_assessment.findData(assessment_algorithm)
+        self.combo_component_assessment.setCurrentIndex(max(0, assessment_index))
         self.checkbox_cov = create_check_box(s.average_cov, text="Усреднять ковариации")
 
         self.bands_group = QGroupBox("Частотные диапазоны (Гц)")
@@ -419,6 +425,7 @@ class MainWindow(QMainWindow):
         settings_layout = QVBoxLayout()
         settings_layout.addLayout(create_hbox([QLabel("Тип ковариации:"), self.combo_cov_type, self.checkbox_cov]))
         settings_layout.addLayout(create_hbox([self.checkbox_regul, QLabel("коэффициент:"), self.spin_box_regul_alpha]))
+        settings_layout.addLayout(create_hbox([QLabel("Component score:"), self.combo_component_assessment]))
         self.settings_group.setLayout(settings_layout)
         
         # Частотные диапазоны
@@ -473,6 +480,7 @@ class MainWindow(QMainWindow):
         self.button_calculate_classifier.clicked.connect(self.on_calculate_classifier)
         self.button_plot_component_spectra.clicked.connect(self.on_plot_selected_component_spectra)
         self.classifier_type_combo.currentIndexChanged.connect(self.on_classifier_feature_settings_changed)
+        self.combo_component_assessment.currentIndexChanged.connect(self.on_component_assessment_algorithm_changed)
         self.spectral_freqs_edit.editingFinished.connect(self.on_classifier_feature_settings_changed)
         self.classifier_path_edit.textEdited.connect(self._mark_classifier_path_manual)
         self.checkbox_regul.stateChanged.connect(
@@ -670,6 +678,10 @@ class MainWindow(QMainWindow):
         s = self.settings
         return os.path.join(r"results", s.project, s.stage, s.session, "cv_scores")
 
+    def _folder_component_dipole_scores(self):
+        s = self.settings
+        return os.path.join(r"results", s.project, s.stage, s.session, "component_dipole_scores")
+
     def _folder_autoselection(self):
         s = self.settings
         return os.path.join(r"results", s.project, s.stage, s.session, "autoselection")
@@ -719,6 +731,9 @@ class MainWindow(QMainWindow):
         return get_topo_positions(MONTAGE_PATH)[good_channel_indices]
 
     def _read_component_tables(self):
+        if self._selected_component_assessment_algorithm() == "dipole":
+            return self._read_dipole_component_tables()
+
         folder_csp = Path(self._folder_csp())
         if not folder_csp.exists():
             return pd.DataFrame()
@@ -730,6 +745,28 @@ class MainWindow(QMainWindow):
                 files.extend(sorted(folder_csp.glob(f"DATAFRAME_*_{stem}.xlsx")))
         else:
             files = sorted(folder_csp.glob("DATAFRAME_*.xlsx"))
+
+        if not files:
+            return pd.DataFrame()
+
+        return pd.concat([pd.read_excel(file) for file in files], ignore_index=True)
+
+    def _read_dipole_component_tables(self):
+        root = Path(self._folder_component_dipole_scores())
+        if not root.exists():
+            return pd.DataFrame()
+
+        stems = self._selected_record_stems()
+        files = []
+        if stems:
+            for stem in stems:
+                files.extend(sorted((root / "tables" / stem).glob("*.xlsx")))
+        else:
+            files = sorted((root / "tables").glob("*/*.xlsx"))
+            if not files:
+                combined = root / "component_dipole_scores.xlsx"
+                if combined.exists():
+                    files = [combined]
 
         if not files:
             return pd.DataFrame()
@@ -1034,18 +1071,41 @@ class MainWindow(QMainWindow):
 
     def _component_scores_by_band(self, df_components):
         scores_by_band = {}
-        required_columns = {"band", "final_score_contra", "final_score_ipsi"}
-        if df_components.empty or not required_columns.issubset(df_components.columns):
+        if df_components.empty or "band" not in df_components.columns:
             return scores_by_band
 
         for band, df_band in df_components.groupby("band", sort=False):
-            contra_score = pd.to_numeric(df_band["final_score_contra"], errors="coerce")
-            ipsi_score = pd.to_numeric(df_band["final_score_ipsi"], errors="coerce")
-            component_scores = contra_score.add(ipsi_score, fill_value=0).to_numpy()
+            component_scores = self._component_score_values(df_band)
+            if component_scores is None:
+                continue
             scores_by_band[band] = component_scores
             scores_by_band[str(band)] = component_scores
 
         return scores_by_band
+
+    def _component_score_values(self, df_band):
+        df_band = df_band.copy()
+        if "selected_order" in df_band.columns:
+            df_band = df_band.sort_values("selected_order")
+
+        if self._selected_component_assessment_algorithm() == "dipole":
+            if "final_score" not in df_band.columns:
+                return None
+            return pd.to_numeric(df_band["final_score"], errors="coerce").to_numpy()
+
+        required_columns = {"final_score_contra", "final_score_ipsi"}
+        if not required_columns.issubset(df_band.columns):
+            return None
+        contra_score = pd.to_numeric(df_band["final_score_contra"], errors="coerce")
+        ipsi_score = pd.to_numeric(df_band["final_score_ipsi"], errors="coerce")
+        return contra_score.add(ipsi_score, fill_value=0).to_numpy()
+
+    def _component_index_column(self, df):
+        if "n_comp" in df.columns:
+            return "n_comp"
+        if "component" in df.columns:
+            return "component"
+        return df.columns[0]
 
     def _score_selected_components(self, row, component_scores_by_band):
         if "band" not in row.index:
@@ -1185,6 +1245,10 @@ class MainWindow(QMainWindow):
     def _selected_classifier_feature_type(self):
         feature_type = self.classifier_type_combo.currentData()
         return feature_type or "csp"
+
+    def _selected_component_assessment_algorithm(self):
+        value = self.combo_component_assessment.currentData()
+        return value or "legacy"
 
     def _parse_spectral_feature_freqs(self):
         text = self.spectral_freqs_edit.text().strip()
@@ -1703,10 +1767,22 @@ class MainWindow(QMainWindow):
             print(f"Не удалось загрузить результаты CSP: {exc}")
             df_components = pd.DataFrame()
 
-        self._show_dataframe(
-            self.components_table,
-            df_components,
-            columns=[
+        if self._selected_component_assessment_algorithm() == "dipole":
+            component_columns = [
+                "record",
+                "band",
+                "component",
+                "evals",
+                "eigscore",
+                "eigengap",
+                "contra_score",
+                "ipsi_score",
+                "gof",
+                "gof_coef",
+                "final_score",
+            ]
+        else:
+            component_columns = [
                 "record",
                 "band",
                 "n_comp",
@@ -1716,7 +1792,12 @@ class MainWindow(QMainWindow):
                 "final_score",
                 "final_score_contra",
                 "final_score_ipsi",
-            ],
+            ]
+
+        self._show_dataframe(
+            self.components_table,
+            df_components,
+            columns=component_columns,
         )
 
         if df_components.empty:
@@ -1795,15 +1876,24 @@ class MainWindow(QMainWindow):
         self.refresh_csp_results()
         self._update_classifier_output_path(force=True)
 
+    def on_component_assessment_algorithm_changed(self):
+        self.settings.CSP.component_assessment_algorithm = self._selected_component_assessment_algorithm()
+        self.pair_scores_table.clearSelection()
+        self._pair_scores_view_df = pd.DataFrame()
+        self._pair_scores_best_df = pd.DataFrame()
+        self.refresh_csp_results()
+        self._update_classifier_output_path(force=True)
+
     def _score_component_groups(self, df_components):
         output_columns = ["band", "components", "absolute_components", "component_assessment_score"]
         rows = []
         for band, df_band in df_components.groupby("band", sort=False):
             df_band = df_band.copy()
-            contra_score = pd.to_numeric(df_band["final_score_contra"], errors="coerce")
-            ipsi_score = pd.to_numeric(df_band["final_score_ipsi"], errors="coerce")
-            df_band["component_score"] = contra_score.add(ipsi_score, fill_value=0)
-            component_scores = df_band["component_score"].to_numpy()
+            if "selected_order" in df_band.columns:
+                df_band = df_band.sort_values("selected_order")
+            component_scores = self._component_score_values(df_band)
+            if component_scores is None:
+                continue
 
             for components in COMPONENT_GROUP_TEMPLATES:
                 try:
@@ -1815,7 +1905,7 @@ class MainWindow(QMainWindow):
                     {
                         "band": band,
                         "components": list(components),
-                        "absolute_components": [int(df_band["n_comp"].iloc[component]) for component in components],
+                        "absolute_components": [int(df_band[self._component_index_column(df_band)].iloc[component]) for component in components],
                         "component_assessment_score": float(np.mean(scores)),
                     }
                 )
@@ -2063,6 +2153,7 @@ class MainWindow(QMainWindow):
         s.average_cov = self.checkbox_cov.isChecked()
         s.covariance_type = self.combo_cov_type.currentText()
         s.robust_cov = s.covariance_type == "ohcov"
+        s.component_assessment_algorithm = self._selected_component_assessment_algorithm()
 
         return {
             "bands": self._read_csp_bands(),
@@ -2292,6 +2383,23 @@ class MainWindow(QMainWindow):
         print(f"Обработка файлов: {self._current_records}")
         
     
+    def _calculate_dipole_component_assessment(self, records, folder_input, folder_csp, config_csp):
+        from scripts.assess_astrosync_components_with_dipoles import (
+            process_records_component_dipole_scores,
+        )
+
+        s = self.settings
+        return process_records_component_dipole_scores(
+            folder_epochs=folder_input,
+            records=records,
+            folder_csp=folder_csp,
+            output_root=self._folder_component_dipole_scores(),
+            config_csp=config_csp,
+            project=s.project,
+            stage=s.stage,
+            subject=s.session,
+        )
+
     def on_calc_csp(self):
         """Расчет CSP"""
         selected_items = self.dataset_list.selectedItems()
@@ -2320,6 +2428,14 @@ class MainWindow(QMainWindow):
             process_records_csp(folder_input, records, folder_output, config, config_csp)
             saved_csp_images = self._redraw_csp_component_images()
             print(f"CSP-картинки сохранены: {saved_csp_images}")
+            if self._selected_component_assessment_algorithm() == "dipole":
+                df_dipole_scores = self._calculate_dipole_component_assessment(
+                    records=records,
+                    folder_input=folder_input,
+                    folder_csp=folder_output,
+                    config_csp=config_csp,
+                )
+                print(f"Dipole component score rows: {len(df_dipole_scores)}")
 
         except Exception as exc:
             QMessageBox.critical(self, "Ошибка расчета CSP", str(exc))
@@ -2417,6 +2533,9 @@ class MainWindow(QMainWindow):
         return plots
 
     def _find_csp_component_plots_clear(self, band=None, record_stem=None):
+        if self._selected_component_assessment_algorithm() == "dipole":
+            return self._find_dipole_component_plots(band=band, record_stem=record_stem)
+
         folder_plots = Path(self._folder_csp_plots_clear())
         if not folder_plots.exists():
             return []
@@ -2436,6 +2555,29 @@ class MainWindow(QMainWindow):
                 for plot in plots
                 if any(plot.name.startswith(f"{band_text}_") for band_text in band_variants)
             ]
+
+        return plots
+
+    def _find_dipole_component_plots(self, band=None, record_stem=None):
+        folder_plots = Path(self._folder_component_dipole_scores()) / "figures"
+        if not folder_plots.exists():
+            return []
+
+        stems = [record_stem] if record_stem else self._selected_record_stems()
+        plots = []
+        if stems:
+            for stem in stems:
+                plots.extend(sorted((folder_plots / stem).glob("*.png")))
+        else:
+            plots = sorted(folder_plots.glob("*/*.png"))
+
+        if band is not None:
+            low, high = band
+            prefixes = {
+                f"{low}-{high}_",
+                f"{low:g}-{high:g}_",
+            }
+            plots = [plot for plot in plots if any(plot.name.startswith(prefix) for prefix in prefixes)]
 
         return plots
 

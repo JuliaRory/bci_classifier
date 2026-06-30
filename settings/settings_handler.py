@@ -30,6 +30,7 @@ class SettingsHandler:
         self.ui.checkbox_regul.stateChanged.connect(self.update_regul)
         self.ui.spin_box_regul_alpha.valueChanged.connect(self.update_regul_alpha)
         self.ui.checkbox_cov.stateChanged.connect(self.update_average_cov)
+        self.ui.combo_component_assessment.currentIndexChanged.connect(self.update_component_assessment_algorithm)
 
     # CSP
     def update_cov_type(self, text):
@@ -44,6 +45,10 @@ class SettingsHandler:
     
     def update_average_cov(self):
         self.settings.CSP.average_cov = self.ui.checkbox_cov.isChecked()
+
+    def update_component_assessment_algorithm(self):
+        value = self.ui.combo_component_assessment.currentData()
+        self.settings.CSP.component_assessment_algorithm = value or "legacy"
     
     # PREPROCESS
     def update_baseline(self, value):
