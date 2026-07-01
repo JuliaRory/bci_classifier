@@ -27,6 +27,7 @@ class CSPSettings:
     average_cov: bool = False 
     freq_bands: List[object] = field(default_factory=lambda: [(8, 12), (9, 13), (10, 14), (8, 15)])
     component_assessment_algorithm: str = "legacy"
+    eigenscore_method: str = "logit"
 
 
 @dataclass

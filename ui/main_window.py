@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
     QRadioButton, QCheckBox, QDoubleSpinBox, QSpinBox, QLineEdit,
     QMessageBox, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QSizePolicy, QSplitter, QScrollArea, QDialog,
-    QDialogButtonBox
+    QDialogButtonBox, QLayout
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
@@ -255,6 +255,7 @@ class MainWindow(QMainWindow):
         # Устанавливаем заголовок и размер окна
         self.setWindowTitle("CSP Analysis Tool")
         self.setMinimumSize(800, 600)
+        self.resize(1450, 900)
         
         # Загружаем иконку (укажите свой путь или оставьте как есть)
         icon_path = "app_icon.ico"  # Замените на путь к вашей иконке
@@ -313,6 +314,12 @@ class MainWindow(QMainWindow):
         assessment_algorithm = getattr(s, "component_assessment_algorithm", "legacy")
         assessment_index = self.combo_component_assessment.findData(assessment_algorithm)
         self.combo_component_assessment.setCurrentIndex(max(0, assessment_index))
+        self.combo_eigenscore_method = QComboBox()
+        self.combo_eigenscore_method.addItem("Logit", "logit")
+        self.combo_eigenscore_method.addItem("|eig - 0.5|", "abs_diff")
+        eigenscore_method = getattr(s, "eigenscore_method", "logit")
+        eigenscore_index = self.combo_eigenscore_method.findData(eigenscore_method)
+        self.combo_eigenscore_method.setCurrentIndex(max(0, eigenscore_index))
         self.checkbox_cov = create_check_box(s.average_cov, text="Усреднять ковариации")
 
         self.bands_group = QGroupBox("Частотные диапазоны (Гц)")
@@ -362,7 +369,15 @@ class MainWindow(QMainWindow):
         """Настройка компоновки"""
         
         central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        central_widget.setMinimumSize(1100, 760)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setWidget(central_widget)
+        self.setCentralWidget(scroll_area)
+
         main_layout = QHBoxLayout(central_widget)
         main_splitter = QSplitter(Qt.Horizontal)
         
@@ -393,11 +408,20 @@ class MainWindow(QMainWindow):
 
         right_widget = QWidget()
         right_panel = self.layout_csp()
+        right_panel.setSizeConstraint(QLayout.SetMinimumSize)
         right_widget.setLayout(right_panel)
+        right_widget.setMinimumWidth(460)
+        right_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        self.right_scroll_area = QScrollArea()
+        self.right_scroll_area.setWidgetResizable(True)
+        self.right_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.right_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.right_scroll_area.setWidget(right_widget)
         
         # Добавляем панели в главный layout
         main_splitter.addWidget(left_widget)
-        main_splitter.addWidget(right_widget)
+        main_splitter.addWidget(self.right_scroll_area)
         main_splitter.setSizes([900, 500])
         main_layout.addWidget(main_splitter)
 
@@ -426,6 +450,7 @@ class MainWindow(QMainWindow):
         settings_layout.addLayout(create_hbox([QLabel("Тип ковариации:"), self.combo_cov_type, self.checkbox_cov]))
         settings_layout.addLayout(create_hbox([self.checkbox_regul, QLabel("коэффициент:"), self.spin_box_regul_alpha]))
         settings_layout.addLayout(create_hbox([QLabel("Component score:"), self.combo_component_assessment]))
+        settings_layout.addLayout(create_hbox([QLabel("Eigscore:"), self.combo_eigenscore_method]))
         self.settings_group.setLayout(settings_layout)
         
         # Частотные диапазоны
@@ -481,6 +506,7 @@ class MainWindow(QMainWindow):
         self.button_plot_component_spectra.clicked.connect(self.on_plot_selected_component_spectra)
         self.classifier_type_combo.currentIndexChanged.connect(self.on_classifier_feature_settings_changed)
         self.combo_component_assessment.currentIndexChanged.connect(self.on_component_assessment_algorithm_changed)
+        self.combo_eigenscore_method.currentIndexChanged.connect(self.on_eigenscore_method_changed)
         self.spectral_freqs_edit.editingFinished.connect(self.on_classifier_feature_settings_changed)
         self.classifier_path_edit.textEdited.connect(self._mark_classifier_path_manual)
         self.checkbox_regul.stateChanged.connect(
@@ -1089,9 +1115,16 @@ class MainWindow(QMainWindow):
             df_band = df_band.sort_values("selected_order")
 
         if self._selected_component_assessment_algorithm() == "dipole":
+            recomputed_dipole_scores = self._recompute_dipole_component_scores(df_band)
+            if recomputed_dipole_scores is not None:
+                return recomputed_dipole_scores
             if "final_score" not in df_band.columns:
                 return None
             return pd.to_numeric(df_band["final_score"], errors="coerce").to_numpy()
+
+        recomputed_scores = self._recompute_legacy_component_scores(df_band)
+        if recomputed_scores is not None:
+            return recomputed_scores
 
         required_columns = {"final_score_contra", "final_score_ipsi"}
         if not required_columns.issubset(df_band.columns):
@@ -1099,6 +1132,59 @@ class MainWindow(QMainWindow):
         contra_score = pd.to_numeric(df_band["final_score_contra"], errors="coerce")
         ipsi_score = pd.to_numeric(df_band["final_score_ipsi"], errors="coerce")
         return contra_score.add(ipsi_score, fill_value=0).to_numpy()
+
+    def _recompute_legacy_component_scores(self, df_band):
+        required_columns = {"score_contra", "score_ipsi"}
+        if not required_columns.issubset(df_band.columns):
+            return None
+
+        eigenscore_method = self._selected_eigenscore_method()
+        eigscore_column = "eigscore1" if eigenscore_method == "logit" else "eigscore"
+        if eigscore_column not in df_band.columns:
+            return None
+
+        eigscore = pd.to_numeric(df_band[eigscore_column], errors="coerce")
+        eigscore_multiplier = 1 + eigscore if eigenscore_method == "abs_diff" else eigscore
+        score_contra = pd.to_numeric(df_band["score_contra"], errors="coerce")
+        score_ipsi = pd.to_numeric(df_band["score_ipsi"], errors="coerce")
+        boost_contra = self._numeric_component_column(df_band, "physio_boost_contra", default=1.0)
+        boost_ipsi = self._numeric_component_column(df_band, "physio_boost_ipsi", default=1.0)
+        return (score_contra * eigscore_multiplier * boost_contra).add(
+            score_ipsi * eigscore_multiplier * boost_ipsi,
+            fill_value=0,
+        ).to_numpy()
+
+    def _numeric_component_column(self, df, column, default):
+        if column not in df.columns:
+            return pd.Series(default, index=df.index, dtype=float)
+        return pd.to_numeric(df[column], errors="coerce").fillna(default)
+
+    def _recompute_dipole_component_scores(self, df_band):
+        if "evals" not in df_band.columns:
+            return None
+
+        if {"contra_score", "ipsi_score"}.issubset(df_band.columns):
+            contra_score = pd.to_numeric(df_band["contra_score"], errors="coerce")
+            ipsi_score = pd.to_numeric(df_band["ipsi_score"], errors="coerce")
+        elif {"weighted_contra", "weighted_ipsi", "locality"}.issubset(df_band.columns):
+            locality = pd.to_numeric(df_band["locality"], errors="coerce").fillna(0)
+            contra_score = pd.to_numeric(df_band["weighted_contra"], errors="coerce") * (1 + locality)
+            ipsi_score = pd.to_numeric(df_band["weighted_ipsi"], errors="coerce") * (1 + locality)
+        else:
+            return None
+
+        evals = pd.to_numeric(df_band["evals"], errors="coerce")
+        if self._selected_eigenscore_method() == "abs_diff":
+            eigscore = (evals - 0.5).abs()
+            eigscore_multiplier = 1 + eigscore
+        else:
+            clipped = evals.clip(lower=1e-10, upper=1 - 1e-10)
+            eigscore = np.log(clipped / (1 - clipped)).abs()
+            eigscore_multiplier = eigscore
+
+        eigengap = self._numeric_component_column(df_band, "eigengap", default=0.0)
+        gof_coef = self._numeric_component_column(df_band, "gof_coef", default=0.0)
+        return (eigscore_multiplier * (contra_score + ipsi_score) * (1 + eigengap) * (1 + gof_coef)).to_numpy()
 
     def _component_index_column(self, df):
         if "n_comp" in df.columns:
@@ -1249,6 +1335,10 @@ class MainWindow(QMainWindow):
     def _selected_component_assessment_algorithm(self):
         value = self.combo_component_assessment.currentData()
         return value or "legacy"
+
+    def _selected_eigenscore_method(self):
+        value = self.combo_eigenscore_method.currentData()
+        return value or "logit"
 
     def _parse_spectral_feature_freqs(self):
         text = self.spectral_freqs_edit.text().strip()
@@ -1599,7 +1689,12 @@ class MainWindow(QMainWindow):
             ax.set_title(f"CSP#{component}")
             ax.set_xlabel("Frequency, Hz")
             ax.set_ylabel("PSD")
-            ax.grid(True, alpha=0.25)
+            x_min = float(freqs[plot_mask][0])
+            x_max = float(freqs[plot_mask][-1])
+            ax.set_xlim(x_min, x_max)
+            ax.set_xticks(np.arange(np.ceil(x_min), np.floor(x_max) + 1, 1))
+            ax.grid(True, axis="x", alpha=0.25)
+            ax.grid(True, axis="y", alpha=0.18)
             ax.legend(loc="upper right")
 
         fig.suptitle(
@@ -1884,6 +1979,14 @@ class MainWindow(QMainWindow):
         self.refresh_csp_results()
         self._update_classifier_output_path(force=True)
 
+    def on_eigenscore_method_changed(self):
+        self.settings.CSP.eigenscore_method = self._selected_eigenscore_method()
+        self.pair_scores_table.clearSelection()
+        self._pair_scores_view_df = pd.DataFrame()
+        self._pair_scores_best_df = pd.DataFrame()
+        self.refresh_csp_results()
+        self._update_classifier_output_path(force=True)
+
     def _score_component_groups(self, df_components):
         output_columns = ["band", "components", "absolute_components", "component_assessment_score"]
         rows = []
@@ -1976,6 +2079,7 @@ class MainWindow(QMainWindow):
         
         self.bands_layout.addWidget(container)
         self.bands_inputs.append((low_input, high_input, plot_button))
+        self._refresh_right_scroll_area()
     
     def on_add_band(self):
         """Добавляет новый частотный диапазон"""
@@ -1988,6 +2092,16 @@ class MainWindow(QMainWindow):
             if last_container and last_container.widget():
                 last_container.widget().deleteLater()
             self.bands_inputs.pop()
+            self._refresh_right_scroll_area()
+
+    def _refresh_right_scroll_area(self):
+        if not hasattr(self, "right_scroll_area"):
+            return
+        widget = self.right_scroll_area.widget()
+        if widget is None or widget.layout() is None:
+            return
+        widget.layout().invalidate()
+        widget.adjustSize()
     
     # ==================== ОБРАБОТЧИКИ КНОПОК ====================
 
@@ -2154,6 +2268,7 @@ class MainWindow(QMainWindow):
         s.covariance_type = self.combo_cov_type.currentText()
         s.robust_cov = s.covariance_type == "ohcov"
         s.component_assessment_algorithm = self._selected_component_assessment_algorithm()
+        s.eigenscore_method = self._selected_eigenscore_method()
 
         return {
             "bands": self._read_csp_bands(),
@@ -2161,6 +2276,7 @@ class MainWindow(QMainWindow):
             "concat": not s.average_cov,
             "regularization": s.use_regularization,
             "alpha": s.alpha_reg,
+            "eigenscore_method": s.eigenscore_method,
         }
 
     def _build_cv_config(self):
@@ -2340,7 +2456,11 @@ class MainWindow(QMainWindow):
                     metadata_csp = {}
 
             band = metadata_csp.get("band")
-            component_scores = build_component_assessment(spatial_patterns, evals)
+            component_scores = build_component_assessment(
+                spatial_patterns,
+                evals,
+                eigenscore_method=self._selected_eigenscore_method(),
+            )
             filename = matrix_path.name[len("MATRIX_") :]
             if filename.endswith(".hdf"):
                 filename = filename[:-4] + ".png"

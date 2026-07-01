@@ -74,6 +74,13 @@ def score_spatial_patterns_physio(
     }
 
 
-def calculate_eigenscore(evals):
-    eig_score = np.abs(np.log(evals / (1 - evals) + 1e-10))
+def calculate_eigenscore(evals, method="logit"):
+    evals = np.asarray(evals, dtype=float)
+    method = method or "logit"
+    if method == "abs_diff":
+        eig_score = np.abs(evals - 0.5)
+    else:
+        eps = 1e-10
+        evals = np.clip(evals, eps, 1 - eps)
+        eig_score = np.abs(np.log(evals / (1 - evals)))
     return np.round(eig_score, 3)

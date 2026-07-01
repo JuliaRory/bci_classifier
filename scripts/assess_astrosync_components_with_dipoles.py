@@ -74,19 +74,22 @@ def normalize_gof(gof):
 
 
 def eigengap(eigvals, component):
-    gaps = []
-    if component > 0:
-        gaps.append(abs(float(eigvals[component]) - float(eigvals[component - 1])))
-    if component + 1 < len(eigvals):
-        gaps.append(abs(float(eigvals[component]) - float(eigvals[component + 1])))
-    return max(gaps) if gaps else 0.0
+    eigvals = np.asarray(eigvals, dtype=float)
+    value = float(eigvals[component])
+
+    if value < 0.5 and component + 1 < len(eigvals):
+        return abs(float(eigvals[component + 1]) - value)
+    if value >= 0.5 and component > 0:
+        return abs(value - float(eigvals[component - 1]))
+    return 0.0
 
 
-def score_matrix_components(df_matrix, spatial_patterns, eigvals):
+def score_matrix_components(df_matrix, spatial_patterns, eigvals, eigenscore_method="logit"):
     selected = component_indices(spatial_patterns.shape[1])
     selected_patterns = np.abs(spatial_patterns.T[selected, :])
 
-    eigscore = calculate_eigenscore(eigvals[selected])
+    eigscore = calculate_eigenscore(eigvals[selected], method=eigenscore_method)
+    eigscore_multiplier = 1 + eigscore if eigenscore_method == "abs_diff" else eigscore
     weighted_contra = calculate_weighted_score(selected_patterns, WEIGHTS_CONTRA)
     weighted_ipsi = calculate_weighted_score(selected_patterns, WEIGHTS_IPSI)
 
@@ -113,7 +116,7 @@ def score_matrix_components(df_matrix, spatial_patterns, eigvals):
         contra_score = float(weighted_contra[order] * (1 + locality[order]))
         ipsi_score = float(weighted_ipsi[order] * (1 + locality[order]))
         final_score = float(
-            eigscore[order]
+            eigscore_multiplier[order]
             * (contra_score + ipsi_score)
             * (1 + gap)
             * (1 + gof_score)
@@ -331,7 +334,12 @@ def process_record_component_dipole_scores(
             cov=cov,
             sphere=sphere,
         )
-        df_scores = score_matrix_components(df_matrix, patterns, eigvals)
+        df_scores = score_matrix_components(
+            df_matrix,
+            patterns,
+            eigvals,
+            eigenscore_method=config_csp.get("eigenscore_method", "logit"),
+        )
         df_scores["project"] = project
         df_scores["stage"] = stage
         df_scores["subject"] = subject
@@ -442,7 +450,12 @@ def process_subject(stage, subject_folder, force_recalculate=False):
                 cov=cov,
                 sphere=sphere,
             )
-            df_scores = score_matrix_components(df_matrix, patterns, eigvals)
+            df_scores = score_matrix_components(
+                df_matrix,
+                patterns,
+                eigvals,
+                eigenscore_method=CONFIG_CSP.get("eigenscore_method", "logit"),
+            )
             subject_rows.append(df_scores)
 
             band_text = f"{band[0]}-{band[1]}"
