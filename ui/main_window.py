@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
     QRadioButton, QCheckBox, QDoubleSpinBox, QSpinBox, QLineEdit,
     QMessageBox, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QSizePolicy, QSplitter, QScrollArea, QDialog,
-    QDialogButtonBox
+    QDialogButtonBox, QLayout
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
@@ -255,6 +255,7 @@ class MainWindow(QMainWindow):
         # Устанавливаем заголовок и размер окна
         self.setWindowTitle("CSP Analysis Tool")
         self.setMinimumSize(800, 600)
+        self.resize(1450, 900)
         
         # Загружаем иконку (укажите свой путь или оставьте как есть)
         icon_path = "app_icon.ico"  # Замените на путь к вашей иконке
@@ -307,6 +308,18 @@ class MainWindow(QMainWindow):
         self.checkbox_regul = create_check_box(s.use_regularization, text="Использовать регуляризацию")
         self.spin_box_regul_alpha = create_spin_box(0.001, 1.0, s.alpha_reg, data_type="float")
         self.spin_box_regul_alpha.setEnabled(self.checkbox_regul.isChecked())
+        self.combo_component_assessment = QComboBox()
+        self.combo_component_assessment.addItem("Legacy score", "legacy")
+        self.combo_component_assessment.addItem("Dipole GOF score", "dipole")
+        assessment_algorithm = getattr(s, "component_assessment_algorithm", "legacy")
+        assessment_index = self.combo_component_assessment.findData(assessment_algorithm)
+        self.combo_component_assessment.setCurrentIndex(max(0, assessment_index))
+        self.combo_eigenscore_method = QComboBox()
+        self.combo_eigenscore_method.addItem("Logit", "logit")
+        self.combo_eigenscore_method.addItem("|eig - 0.5|", "abs_diff")
+        eigenscore_method = getattr(s, "eigenscore_method", "logit")
+        eigenscore_index = self.combo_eigenscore_method.findData(eigenscore_method)
+        self.combo_eigenscore_method.setCurrentIndex(max(0, eigenscore_index))
         self.checkbox_cov = create_check_box(s.average_cov, text="Усреднять ковариации")
 
         self.bands_group = QGroupBox("Частотные диапазоны (Гц)")
@@ -356,7 +369,15 @@ class MainWindow(QMainWindow):
         """Настройка компоновки"""
         
         central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        central_widget.setMinimumSize(1100, 760)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setWidget(central_widget)
+        self.setCentralWidget(scroll_area)
+
         main_layout = QHBoxLayout(central_widget)
         main_splitter = QSplitter(Qt.Horizontal)
         
@@ -387,11 +408,20 @@ class MainWindow(QMainWindow):
 
         right_widget = QWidget()
         right_panel = self.layout_csp()
+        right_panel.setSizeConstraint(QLayout.SetMinimumSize)
         right_widget.setLayout(right_panel)
+        right_widget.setMinimumWidth(460)
+        right_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        self.right_scroll_area = QScrollArea()
+        self.right_scroll_area.setWidgetResizable(True)
+        self.right_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.right_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.right_scroll_area.setWidget(right_widget)
         
         # Добавляем панели в главный layout
         main_splitter.addWidget(left_widget)
-        main_splitter.addWidget(right_widget)
+        main_splitter.addWidget(self.right_scroll_area)
         main_splitter.setSizes([900, 500])
         main_layout.addWidget(main_splitter)
 
@@ -419,6 +449,8 @@ class MainWindow(QMainWindow):
         settings_layout = QVBoxLayout()
         settings_layout.addLayout(create_hbox([QLabel("Тип ковариации:"), self.combo_cov_type, self.checkbox_cov]))
         settings_layout.addLayout(create_hbox([self.checkbox_regul, QLabel("коэффициент:"), self.spin_box_regul_alpha]))
+        settings_layout.addLayout(create_hbox([QLabel("Component score:"), self.combo_component_assessment]))
+        settings_layout.addLayout(create_hbox([QLabel("Eigscore:"), self.combo_eigenscore_method]))
         self.settings_group.setLayout(settings_layout)
         
         # Частотные диапазоны
@@ -473,6 +505,8 @@ class MainWindow(QMainWindow):
         self.button_calculate_classifier.clicked.connect(self.on_calculate_classifier)
         self.button_plot_component_spectra.clicked.connect(self.on_plot_selected_component_spectra)
         self.classifier_type_combo.currentIndexChanged.connect(self.on_classifier_feature_settings_changed)
+        self.combo_component_assessment.currentIndexChanged.connect(self.on_component_assessment_algorithm_changed)
+        self.combo_eigenscore_method.currentIndexChanged.connect(self.on_eigenscore_method_changed)
         self.spectral_freqs_edit.editingFinished.connect(self.on_classifier_feature_settings_changed)
         self.classifier_path_edit.textEdited.connect(self._mark_classifier_path_manual)
         self.checkbox_regul.stateChanged.connect(
@@ -670,6 +704,10 @@ class MainWindow(QMainWindow):
         s = self.settings
         return os.path.join(r"results", s.project, s.stage, s.session, "cv_scores")
 
+    def _folder_component_dipole_scores(self):
+        s = self.settings
+        return os.path.join(r"results", s.project, s.stage, s.session, "component_dipole_scores")
+
     def _folder_autoselection(self):
         s = self.settings
         return os.path.join(r"results", s.project, s.stage, s.session, "autoselection")
@@ -719,6 +757,9 @@ class MainWindow(QMainWindow):
         return get_topo_positions(MONTAGE_PATH)[good_channel_indices]
 
     def _read_component_tables(self):
+        if self._selected_component_assessment_algorithm() == "dipole":
+            return self._read_dipole_component_tables()
+
         folder_csp = Path(self._folder_csp())
         if not folder_csp.exists():
             return pd.DataFrame()
@@ -730,6 +771,28 @@ class MainWindow(QMainWindow):
                 files.extend(sorted(folder_csp.glob(f"DATAFRAME_*_{stem}.xlsx")))
         else:
             files = sorted(folder_csp.glob("DATAFRAME_*.xlsx"))
+
+        if not files:
+            return pd.DataFrame()
+
+        return pd.concat([pd.read_excel(file) for file in files], ignore_index=True)
+
+    def _read_dipole_component_tables(self):
+        root = Path(self._folder_component_dipole_scores())
+        if not root.exists():
+            return pd.DataFrame()
+
+        stems = self._selected_record_stems()
+        files = []
+        if stems:
+            for stem in stems:
+                files.extend(sorted((root / "tables" / stem).glob("*.xlsx")))
+        else:
+            files = sorted((root / "tables").glob("*/*.xlsx"))
+            if not files:
+                combined = root / "component_dipole_scores.xlsx"
+                if combined.exists():
+                    files = [combined]
 
         if not files:
             return pd.DataFrame()
@@ -1034,18 +1097,101 @@ class MainWindow(QMainWindow):
 
     def _component_scores_by_band(self, df_components):
         scores_by_band = {}
-        required_columns = {"band", "final_score_contra", "final_score_ipsi"}
-        if df_components.empty or not required_columns.issubset(df_components.columns):
+        if df_components.empty or "band" not in df_components.columns:
             return scores_by_band
 
         for band, df_band in df_components.groupby("band", sort=False):
-            contra_score = pd.to_numeric(df_band["final_score_contra"], errors="coerce")
-            ipsi_score = pd.to_numeric(df_band["final_score_ipsi"], errors="coerce")
-            component_scores = contra_score.add(ipsi_score, fill_value=0).to_numpy()
+            component_scores = self._component_score_values(df_band)
+            if component_scores is None:
+                continue
             scores_by_band[band] = component_scores
             scores_by_band[str(band)] = component_scores
 
         return scores_by_band
+
+    def _component_score_values(self, df_band):
+        df_band = df_band.copy()
+        if "selected_order" in df_band.columns:
+            df_band = df_band.sort_values("selected_order")
+
+        if self._selected_component_assessment_algorithm() == "dipole":
+            recomputed_dipole_scores = self._recompute_dipole_component_scores(df_band)
+            if recomputed_dipole_scores is not None:
+                return recomputed_dipole_scores
+            if "final_score" not in df_band.columns:
+                return None
+            return pd.to_numeric(df_band["final_score"], errors="coerce").to_numpy()
+
+        recomputed_scores = self._recompute_legacy_component_scores(df_band)
+        if recomputed_scores is not None:
+            return recomputed_scores
+
+        required_columns = {"final_score_contra", "final_score_ipsi"}
+        if not required_columns.issubset(df_band.columns):
+            return None
+        contra_score = pd.to_numeric(df_band["final_score_contra"], errors="coerce")
+        ipsi_score = pd.to_numeric(df_band["final_score_ipsi"], errors="coerce")
+        return contra_score.add(ipsi_score, fill_value=0).to_numpy()
+
+    def _recompute_legacy_component_scores(self, df_band):
+        required_columns = {"score_contra", "score_ipsi"}
+        if not required_columns.issubset(df_band.columns):
+            return None
+
+        eigenscore_method = self._selected_eigenscore_method()
+        eigscore_column = "eigscore1" if eigenscore_method == "logit" else "eigscore"
+        if eigscore_column not in df_band.columns:
+            return None
+
+        eigscore = pd.to_numeric(df_band[eigscore_column], errors="coerce")
+        eigscore_multiplier = 1 + eigscore if eigenscore_method == "abs_diff" else eigscore
+        score_contra = pd.to_numeric(df_band["score_contra"], errors="coerce")
+        score_ipsi = pd.to_numeric(df_band["score_ipsi"], errors="coerce")
+        boost_contra = self._numeric_component_column(df_band, "physio_boost_contra", default=1.0)
+        boost_ipsi = self._numeric_component_column(df_band, "physio_boost_ipsi", default=1.0)
+        return (score_contra * eigscore_multiplier * boost_contra).add(
+            score_ipsi * eigscore_multiplier * boost_ipsi,
+            fill_value=0,
+        ).to_numpy()
+
+    def _numeric_component_column(self, df, column, default):
+        if column not in df.columns:
+            return pd.Series(default, index=df.index, dtype=float)
+        return pd.to_numeric(df[column], errors="coerce").fillna(default)
+
+    def _recompute_dipole_component_scores(self, df_band):
+        if "evals" not in df_band.columns:
+            return None
+
+        if {"contra_score", "ipsi_score"}.issubset(df_band.columns):
+            contra_score = pd.to_numeric(df_band["contra_score"], errors="coerce")
+            ipsi_score = pd.to_numeric(df_band["ipsi_score"], errors="coerce")
+        elif {"weighted_contra", "weighted_ipsi", "locality"}.issubset(df_band.columns):
+            locality = pd.to_numeric(df_band["locality"], errors="coerce").fillna(0)
+            contra_score = pd.to_numeric(df_band["weighted_contra"], errors="coerce") * (1 + locality)
+            ipsi_score = pd.to_numeric(df_band["weighted_ipsi"], errors="coerce") * (1 + locality)
+        else:
+            return None
+
+        evals = pd.to_numeric(df_band["evals"], errors="coerce")
+        if self._selected_eigenscore_method() == "abs_diff":
+            eigscore = (evals - 0.5).abs()
+            eigscore_multiplier = 1 + eigscore
+        else:
+            clipped = evals.clip(lower=1e-10, upper=1 - 1e-10)
+            eigscore = np.log(clipped / (1 - clipped)).abs()
+            eigscore_multiplier = eigscore
+
+        eigengap = self._numeric_component_column(df_band, "eigengap", default=0.0)
+        gof_coef = self._numeric_component_column(df_band, "gof_coef", default=0.0)
+        return (eigscore_multiplier * (contra_score + ipsi_score) * (1 + eigengap) * (1 + gof_coef)).to_numpy()
+
+    def _component_index_column(self, df):
+        if "n_comp" in df.columns:
+            return "n_comp"
+        if "component" in df.columns:
+            return "component"
+        return df.columns[0]
 
     def _score_selected_components(self, row, component_scores_by_band):
         if "band" not in row.index:
@@ -1185,6 +1331,14 @@ class MainWindow(QMainWindow):
     def _selected_classifier_feature_type(self):
         feature_type = self.classifier_type_combo.currentData()
         return feature_type or "csp"
+
+    def _selected_component_assessment_algorithm(self):
+        value = self.combo_component_assessment.currentData()
+        return value or "legacy"
+
+    def _selected_eigenscore_method(self):
+        value = self.combo_eigenscore_method.currentData()
+        return value or "logit"
 
     def _parse_spectral_feature_freqs(self):
         text = self.spectral_freqs_edit.text().strip()
@@ -1535,7 +1689,12 @@ class MainWindow(QMainWindow):
             ax.set_title(f"CSP#{component}")
             ax.set_xlabel("Frequency, Hz")
             ax.set_ylabel("PSD")
-            ax.grid(True, alpha=0.25)
+            x_min = float(freqs[plot_mask][0])
+            x_max = float(freqs[plot_mask][-1])
+            ax.set_xlim(x_min, x_max)
+            ax.set_xticks(np.arange(np.ceil(x_min), np.floor(x_max) + 1, 1))
+            ax.grid(True, axis="x", alpha=0.25)
+            ax.grid(True, axis="y", alpha=0.18)
             ax.legend(loc="upper right")
 
         fig.suptitle(
@@ -1703,10 +1862,22 @@ class MainWindow(QMainWindow):
             print(f"Не удалось загрузить результаты CSP: {exc}")
             df_components = pd.DataFrame()
 
-        self._show_dataframe(
-            self.components_table,
-            df_components,
-            columns=[
+        if self._selected_component_assessment_algorithm() == "dipole":
+            component_columns = [
+                "record",
+                "band",
+                "component",
+                "evals",
+                "eigscore",
+                "eigengap",
+                "contra_score",
+                "ipsi_score",
+                "gof",
+                "gof_coef",
+                "final_score",
+            ]
+        else:
+            component_columns = [
                 "record",
                 "band",
                 "n_comp",
@@ -1716,7 +1887,12 @@ class MainWindow(QMainWindow):
                 "final_score",
                 "final_score_contra",
                 "final_score_ipsi",
-            ],
+            ]
+
+        self._show_dataframe(
+            self.components_table,
+            df_components,
+            columns=component_columns,
         )
 
         if df_components.empty:
@@ -1795,15 +1971,32 @@ class MainWindow(QMainWindow):
         self.refresh_csp_results()
         self._update_classifier_output_path(force=True)
 
+    def on_component_assessment_algorithm_changed(self):
+        self.settings.CSP.component_assessment_algorithm = self._selected_component_assessment_algorithm()
+        self.pair_scores_table.clearSelection()
+        self._pair_scores_view_df = pd.DataFrame()
+        self._pair_scores_best_df = pd.DataFrame()
+        self.refresh_csp_results()
+        self._update_classifier_output_path(force=True)
+
+    def on_eigenscore_method_changed(self):
+        self.settings.CSP.eigenscore_method = self._selected_eigenscore_method()
+        self.pair_scores_table.clearSelection()
+        self._pair_scores_view_df = pd.DataFrame()
+        self._pair_scores_best_df = pd.DataFrame()
+        self.refresh_csp_results()
+        self._update_classifier_output_path(force=True)
+
     def _score_component_groups(self, df_components):
         output_columns = ["band", "components", "absolute_components", "component_assessment_score"]
         rows = []
         for band, df_band in df_components.groupby("band", sort=False):
             df_band = df_band.copy()
-            contra_score = pd.to_numeric(df_band["final_score_contra"], errors="coerce")
-            ipsi_score = pd.to_numeric(df_band["final_score_ipsi"], errors="coerce")
-            df_band["component_score"] = contra_score.add(ipsi_score, fill_value=0)
-            component_scores = df_band["component_score"].to_numpy()
+            if "selected_order" in df_band.columns:
+                df_band = df_band.sort_values("selected_order")
+            component_scores = self._component_score_values(df_band)
+            if component_scores is None:
+                continue
 
             for components in COMPONENT_GROUP_TEMPLATES:
                 try:
@@ -1815,7 +2008,7 @@ class MainWindow(QMainWindow):
                     {
                         "band": band,
                         "components": list(components),
-                        "absolute_components": [int(df_band["n_comp"].iloc[component]) for component in components],
+                        "absolute_components": [int(df_band[self._component_index_column(df_band)].iloc[component]) for component in components],
                         "component_assessment_score": float(np.mean(scores)),
                     }
                 )
@@ -1886,6 +2079,7 @@ class MainWindow(QMainWindow):
         
         self.bands_layout.addWidget(container)
         self.bands_inputs.append((low_input, high_input, plot_button))
+        self._refresh_right_scroll_area()
     
     def on_add_band(self):
         """Добавляет новый частотный диапазон"""
@@ -1898,6 +2092,16 @@ class MainWindow(QMainWindow):
             if last_container and last_container.widget():
                 last_container.widget().deleteLater()
             self.bands_inputs.pop()
+            self._refresh_right_scroll_area()
+
+    def _refresh_right_scroll_area(self):
+        if not hasattr(self, "right_scroll_area"):
+            return
+        widget = self.right_scroll_area.widget()
+        if widget is None or widget.layout() is None:
+            return
+        widget.layout().invalidate()
+        widget.adjustSize()
     
     # ==================== ОБРАБОТЧИКИ КНОПОК ====================
 
@@ -2063,6 +2267,8 @@ class MainWindow(QMainWindow):
         s.average_cov = self.checkbox_cov.isChecked()
         s.covariance_type = self.combo_cov_type.currentText()
         s.robust_cov = s.covariance_type == "ohcov"
+        s.component_assessment_algorithm = self._selected_component_assessment_algorithm()
+        s.eigenscore_method = self._selected_eigenscore_method()
 
         return {
             "bands": self._read_csp_bands(),
@@ -2070,6 +2276,7 @@ class MainWindow(QMainWindow):
             "concat": not s.average_cov,
             "regularization": s.use_regularization,
             "alpha": s.alpha_reg,
+            "eigenscore_method": s.eigenscore_method,
         }
 
     def _build_cv_config(self):
@@ -2249,7 +2456,11 @@ class MainWindow(QMainWindow):
                     metadata_csp = {}
 
             band = metadata_csp.get("band")
-            component_scores = build_component_assessment(spatial_patterns, evals)
+            component_scores = build_component_assessment(
+                spatial_patterns,
+                evals,
+                eigenscore_method=self._selected_eigenscore_method(),
+            )
             filename = matrix_path.name[len("MATRIX_") :]
             if filename.endswith(".hdf"):
                 filename = filename[:-4] + ".png"
@@ -2292,6 +2503,23 @@ class MainWindow(QMainWindow):
         print(f"Обработка файлов: {self._current_records}")
         
     
+    def _calculate_dipole_component_assessment(self, records, folder_input, folder_csp, config_csp):
+        from scripts.assess_astrosync_components_with_dipoles import (
+            process_records_component_dipole_scores,
+        )
+
+        s = self.settings
+        return process_records_component_dipole_scores(
+            folder_epochs=folder_input,
+            records=records,
+            folder_csp=folder_csp,
+            output_root=self._folder_component_dipole_scores(),
+            config_csp=config_csp,
+            project=s.project,
+            stage=s.stage,
+            subject=s.session,
+        )
+
     def on_calc_csp(self):
         """Расчет CSP"""
         selected_items = self.dataset_list.selectedItems()
@@ -2320,6 +2548,14 @@ class MainWindow(QMainWindow):
             process_records_csp(folder_input, records, folder_output, config, config_csp)
             saved_csp_images = self._redraw_csp_component_images()
             print(f"CSP-картинки сохранены: {saved_csp_images}")
+            if self._selected_component_assessment_algorithm() == "dipole":
+                df_dipole_scores = self._calculate_dipole_component_assessment(
+                    records=records,
+                    folder_input=folder_input,
+                    folder_csp=folder_output,
+                    config_csp=config_csp,
+                )
+                print(f"Dipole component score rows: {len(df_dipole_scores)}")
 
         except Exception as exc:
             QMessageBox.critical(self, "Ошибка расчета CSP", str(exc))
@@ -2417,6 +2653,9 @@ class MainWindow(QMainWindow):
         return plots
 
     def _find_csp_component_plots_clear(self, band=None, record_stem=None):
+        if self._selected_component_assessment_algorithm() == "dipole":
+            return self._find_dipole_component_plots(band=band, record_stem=record_stem)
+
         folder_plots = Path(self._folder_csp_plots_clear())
         if not folder_plots.exists():
             return []
@@ -2436,6 +2675,29 @@ class MainWindow(QMainWindow):
                 for plot in plots
                 if any(plot.name.startswith(f"{band_text}_") for band_text in band_variants)
             ]
+
+        return plots
+
+    def _find_dipole_component_plots(self, band=None, record_stem=None):
+        folder_plots = Path(self._folder_component_dipole_scores()) / "figures"
+        if not folder_plots.exists():
+            return []
+
+        stems = [record_stem] if record_stem else self._selected_record_stems()
+        plots = []
+        if stems:
+            for stem in stems:
+                plots.extend(sorted((folder_plots / stem).glob("*.png")))
+        else:
+            plots = sorted(folder_plots.glob("*/*.png"))
+
+        if band is not None:
+            low, high = band
+            prefixes = {
+                f"{low}-{high}_",
+                f"{low:g}-{high:g}_",
+            }
+            plots = [plot for plot in plots if any(plot.name.startswith(prefix) for prefix in prefixes)]
 
         return plots
 

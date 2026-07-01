@@ -40,11 +40,13 @@ def calculate_weighted_score(patterns, weights):
     return patterns @ w
 
 
-def build_component_assessment(spatial_patterns, evals):
+def build_component_assessment(spatial_patterns, evals, eigenscore_method="logit"):
     n_components = spatial_patterns.shape[1]
     selected_components = get_selected_component_indices(n_components)
     patterns = np_abs(spatial_patterns.T[selected_components, :])
-    eigscore = calculate_eigenscore(evals[selected_components])
+    eigscore = calculate_eigenscore(evals[selected_components], method=eigenscore_method)
+    eigscore_abs_diff = calculate_eigenscore(evals[selected_components], method="abs_diff")
+    eigscore_logit = calculate_eigenscore(evals[selected_components], method="logit")
 
     score = calculate_weighted_score(patterns, WEIGHTS)
     score_contra = calculate_weighted_score(patterns, WEIGHTS_CONTRA)
@@ -71,8 +73,9 @@ def build_component_assessment(spatial_patterns, evals):
     physio_boost_ipsi = physio_boost_locality # * physio_boost_ipsi_contrast
     physio_boost = physio_boost_contra + physio_boost_ipsi
 
-    final_score_contra_basic = score_contra * eigscore
-    final_score_ipsi_basic = score_ipsi * eigscore
+    eigscore_multiplier = 1 + eigscore if eigenscore_method == "abs_diff" else eigscore
+    final_score_contra_basic = score_contra * eigscore_multiplier
+    final_score_ipsi_basic = score_ipsi * eigscore_multiplier
 
     final_score_basic = final_score_contra_basic + final_score_ipsi_basic
     final_score_contra = final_score_contra_basic * physio_boost_contra
@@ -83,8 +86,8 @@ def build_component_assessment(spatial_patterns, evals):
     return {
         "n_comp": array(selected_components),
         "evals": evals[selected_components],
-        "eigscore": np_abs(evals[selected_components] - 0.5),
-        "eigscore1": eigscore,
+        "eigscore": eigscore_abs_diff,
+        "eigscore1": eigscore_logit,
         "score": score,
         "score_contra": score_contra,
         "score_ipsi": score_ipsi,
@@ -112,7 +115,7 @@ def extract_record_name(filename, metadata_csp):
     return filename[filename.find(reg_alpha) + len(reg_alpha) + 1 :]
 
 
-def build_component_assessment_table(spatial_patterns, evals, metadata_csp, session, filename):
+def build_component_assessment_table(spatial_patterns, evals, metadata_csp, session, filename, eigenscore_method=None):
     base_row = {
         "session": session,
         "record": extract_record_name(filename, metadata_csp),
@@ -122,7 +125,8 @@ def build_component_assessment_table(spatial_patterns, evals, metadata_csp, sess
             continue
         base_row[key] = value
 
-    scores = build_component_assessment(spatial_patterns, evals)
+    eigenscore_method = eigenscore_method or metadata_csp.get("eigenscore_method", "logit")
+    scores = build_component_assessment(spatial_patterns, evals, eigenscore_method=eigenscore_method)
     rows = []
     for i in range(len(scores["n_comp"])):
         row = base_row.copy()

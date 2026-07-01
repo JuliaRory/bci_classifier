@@ -81,6 +81,9 @@ def process_record(full_path, folder_output, config, config_csp):
             h5f.create_dataset("projForward", data=spatial_patterns)
             h5f.create_dataset("projInverse", data=spatial_filters)
             h5f.create_dataset("evals", data=evals)
+            h5f.attrs["csp_matrix_semantics"] = "projForward=spatial_patterns;projInverse=spatial_filters"
+            h5f.attrs["projForward_kind"] = "spatial_patterns"
+            h5f.attrs["projInverse_kind"] = "spatial_filters"
 
             config_str = json.dumps(config)
             h5f.create_dataset("metadata", data=config_str)
@@ -97,7 +100,11 @@ def process_record(full_path, folder_output, config, config_csp):
             filename=Path(matrix_filename).name,
         )
         save_component_assessment_table(assessment_df, folder_output, Path(matrix_filename).name)
-        component_scores = build_component_assessment(spatial_patterns, evals)
+        component_scores = build_component_assessment(
+            spatial_patterns,
+            evals,
+            eigenscore_method=config_csp.get("eigenscore_method", "logit"),
+        )
 
         parts = Path(full_path).parts
         plot_folder_name = "CSP_components_clear" if config_csp.get("same_vlim", True) else "CSP_components"
