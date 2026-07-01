@@ -2,6 +2,7 @@ import os
 import sys
 from pathlib import Path
 
+import ast
 import json
 import numpy as np
 import pandas as pd
@@ -18,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.calculate_csp import process_records_csp, plot_10_comp
 from scripts.cross_validated_test import process_records_cross_validated
+from settings.settings import Settings
 from src.analysis.features import get_csp_features
 from src.analysis.preprocessing import bandpass_filter
 from src.analysis.csp_component_scores import (
@@ -63,7 +65,7 @@ stage = "exp"
 fair_pipeline_name = "split_before_csp"
 recalculate_csp = False
 top_n_models = 3
-component_2_score_threshold = 3.0
+brier_score_penalty_L = float(getattr(Settings(), "brier_score_penalty_L", 5.0))
 
 
 def get_epoch_records(folder_epochs):
@@ -105,12 +107,12 @@ def redraw_existing_csp_outputs(folder_csp, subject_name, record_name):
     for band in config_csp["bands"]:
         matrix_path = Path(folder_csp) / get_matrix_filename(record_name, band)
         with File(matrix_path, "r") as h5f:
-            proj_inverse = h5f["projInverse"][:]
+            spatial_patterns = h5f["projForward"][:]
             evals = h5f["evals"][:]
 
         metadata_csp = {**config_csp, "band": band}
         assessment_df = build_component_assessment_table(
-            proj_inverse=proj_inverse,
+            spatial_patterns=spatial_patterns,
             evals=evals,
             metadata_csp=metadata_csp,
             session=subject_name,
@@ -118,9 +120,9 @@ def redraw_existing_csp_outputs(folder_csp, subject_name, record_name):
         )
         save_component_assessment_table(assessment_df, str(folder_csp), matrix_path.name)
 
-        component_scores = build_component_assessment(proj_inverse, evals)
+        component_scores = build_component_assessment(spatial_patterns, evals)
         plot_path = get_plot_filename(subject_name, record_name, band)
-        plot_10_comp(evals, proj_inverse, band, str(plot_path), config_csp, component_scores)
+        plot_10_comp(evals, spatial_patterns, band, str(plot_path), config_csp, component_scores)
         print("reused CSP matrix -> ", matrix_path)
 
 
@@ -155,32 +157,72 @@ def parse_component_tuple(value):
     raise ValueError(f"Unsupported component tuple value: {value}")
 
 
-def get_feature_groups_from_component_scores(folder_csp, record_name):
-    record_stem = Path(record_name).stem[len("EPOCHS_") :]
-    assessment_files = sorted(Path(folder_csp).glob(f"DATAFRAME_*_{record_stem}.xlsx"))
-    groups = {
-        (0, -1),
-        (0, 1, -1),
-        (0, 1, -2, -1),
-        (0, -2, -1),
-        (0, 1),
-    }
+def parse_band_value(value):
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return ast.literal_eval(text)
+    return value
 
-    if not assessment_files:
-        return sorted(groups, key=lambda group: (len(group), group))
+
+def band_key(value):
+    band = parse_band_value(value)
+    return json.dumps([float(freq) for freq in band])
+
+
+def component_scores_by_band(folder_csp, record_name):
+    record_stem = Path(record_name).stem[len("EPOCHS_") :]
+    scores_by_band = {}
+    assessment_files = sorted(Path(folder_csp).glob(f"DATAFRAME_*_{record_stem}.xlsx"))
 
     for assessment_file in assessment_files:
         df = pd.read_excel(assessment_file)
-        score_column = "final_score" if "final_score" in df.columns else None
-        if score_column is None:
+        if "band" not in df.columns:
             continue
 
-        component_2_rows = df[df["n_comp"].astype(int) == 2]
-        if not component_2_rows.empty:
-            component_2_score = float(component_2_rows[score_column].max())
-            if component_2_score > component_2_score_threshold:
-                groups.add((0, 2, -1))
-                groups.add((0, 1, 2, -1))
+        if {"final_score_contra", "final_score_ipsi"}.issubset(df.columns):
+            component_scores = (
+                pd.to_numeric(df["final_score_contra"], errors="coerce")
+                .add(pd.to_numeric(df["final_score_ipsi"], errors="coerce"), fill_value=0)
+                .to_numpy()
+            )
+        elif "final_score" in df.columns:
+            component_scores = pd.to_numeric(df["final_score"], errors="coerce").to_numpy()
+        else:
+            continue
+
+        key = band_key(df["band"].iloc[0])
+        scores_by_band[key] = component_scores
+
+    return scores_by_band
+
+
+def score_selected_components(row, scores_by_band):
+    scores = scores_by_band.get(band_key(row["band"]))
+    if scores is None:
+        return np.nan
+
+    components = parse_component_tuple(row["sel_comp"])
+    try:
+        selected_scores = [scores[component] for component in components]
+    except (IndexError, TypeError):
+        return np.nan
+
+    return float(np.mean(selected_scores))
+
+
+def get_feature_groups_from_component_scores(folder_csp, record_name):
+    groups = {
+        (0, -1),
+        (0, 1),
+        (0, 1, -1),
+        (0, 2, -1),
+        (0, 1, -2, -1),
+        (0, 1, 2, -1),
+        (0, -2, -1),
+    }
 
     return sorted(groups, key=lambda group: (len(group), group))
 
@@ -288,7 +330,7 @@ def save_probability_plot(model, features, labels, output_path):
     close(fig)
 
 
-def select_top_pairs_from_cv(cv_scores_path, record_name, top_n=3):
+def select_top_pairs_from_cv(cv_scores_path, folder_csp, record_name, top_n=3):
     df = pd.read_excel(cv_scores_path)
     df = df[(df["pipeline"] == fair_pipeline_name) & (df["record"] == record_name[len("EPOCHS_") :])].copy()
     if df.empty:
@@ -303,9 +345,22 @@ def select_top_pairs_from_cv(cv_scores_path, record_name, top_n=3):
             }
         )
     )
+    scores_by_band = component_scores_by_band(folder_csp, record_name)
+    summary["component_assessment_score"] = summary.apply(
+        lambda row: score_selected_components(row, scores_by_band),
+        axis=1,
+    )
+    summary = summary.dropna(subset=["component_assessment_score"]).copy()
+    if summary.empty:
+        raise ValueError(f"No component assessment scores found for record {record_name}")
+
+    brier_score = pd.to_numeric(summary["brier score"], errors="coerce")
+    summary["ranking_score"] = summary["component_assessment_score"] * (
+        1 + 1 / (1 + brier_score_penalty_L * brier_score)
+    )
     summary = summary.sort_values(
-        ["balanced accuracy", "brier score"],
-        ascending=[False, True],
+        ["ranking_score", "balanced accuracy", "brier score"],
+        ascending=[False, False, True],
         ignore_index=True,
     )
     return summary.head(top_n).reset_index(drop=True)
@@ -314,7 +369,12 @@ def select_top_pairs_from_cv(cv_scores_path, record_name, top_n=3):
 def train_and_save_final_models(folder_epochs, folder_csp, folder_cv, subject_name, record_name):
     full_path = Path(folder_epochs) / record_name
     epochs, labels = load_epochs(full_path)
-    top_pairs = select_top_pairs_from_cv(Path(folder_cv) / f"{Path(record_name).stem[len('EPOCHS_'):]}.xlsx", record_name, top_n_models)
+    top_pairs = select_top_pairs_from_cv(
+        Path(folder_cv) / f"{Path(record_name).stem[len('EPOCHS_'):]}.xlsx",
+        folder_csp,
+        record_name,
+        top_n_models,
+    )
 
     folder_models = Path("models") / project / stage / subject_name
     folder_proba = Path("results") / project / stage / subject_name / "PROBA_final"
@@ -328,7 +388,7 @@ def train_and_save_final_models(folder_epochs, folder_csp, folder_cv, subject_na
         matrix_path = Path(folder_csp) / get_matrix_filename(record_name, band)
 
         with File(matrix_path, "r") as h5f:
-            spatial_filters = h5f["projForward"][:]
+            spatial_filters = h5f["projInverse"][:]
 
         features = build_model_features(epochs, spatial_filters, band, components)
         model = train_final_classifier(features, labels)
@@ -412,7 +472,10 @@ def run_subject(subject_folder):
         for _, row in top_pairs.iterrows():
             print(
                 f"  selected {row['band']}-{row['sel_comp']}-"
-                f"{row['balanced accuracy']:.3f}-{row['brier score']:.3f}"
+                f"component={row['component_assessment_score']:.3f}-"
+                f"balanced={row['balanced accuracy']:.3f}-"
+                f"brier={row['brier score']:.3f}-"
+                f"ranking={row['ranking_score']:.3f}"
             )
         for model_path in top_models:
             print("  model ->", model_path)
@@ -424,7 +487,9 @@ def run():
         raise FileNotFoundError(f"Dataset root not found: {folder_root}")
 
     for subject_folder in iter_subject_folders(folder_root):
-        if subject_folder.name in ["01TG", "02ES", "03AC", "04AB", "06KK", "07TS", "10AS", "11AK"]:
+        # if subject_folder.name in ["01TG", "02ES", "03AC", "04AB", "06KK", "07TS", "10AS", "11AK"]:
+        #     continue
+        if not subject_folder.name in ["20ES", "21ES", "22ES", "23MM", "24EK", "25PP"]:
             continue
         run_subject(subject_folder)
 

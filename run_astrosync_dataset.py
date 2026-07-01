@@ -42,7 +42,7 @@ def get_records(folder_input):
         if file.is_file() and file.suffix.lower() == file_suffix
     )
 
-processed_files = ['01TG', '02ES', '03AC', '04AB', '06KK', '07TS', '10AS', '11AK', '13AU',  '14BE', '15AZ']
+processed_files = [] #['01TG', '02ES', '03AC', '04AB', '06KK', '07TS', '10AS', '11AK', '13AU',  '14BE', '15AZ']
 
 def run():
     folder_root = Path("data") / project / "raw" / stage

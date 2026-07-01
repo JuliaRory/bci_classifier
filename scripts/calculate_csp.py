@@ -22,10 +22,10 @@ labels = get_channel_names(r"./resources/mks64_standard.ced")
 EEG_CHANNELS = array([find_ch_idx(ch, r"./resources/mks64_standard.ced") for ch in labels if not(ch in bad_channels)])
 xy = get_topo_positions("resources/mks64_standard.ced")[EEG_CHANNELS]
 
-def plot_10_comp(evals, projForward, band, output_filename, config, component_scores):
+def plot_10_comp(evals, spatial_patterns, band, output_filename, config, component_scores):
     fig = plot_10_csp_components(
         abs(evals),
-        projForward,
+        spatial_patterns,
         xy,
         component_scores=component_scores,
         same_vlim=config.get("same_vlim", True),
@@ -68,7 +68,7 @@ def process_record(full_path, folder_output, config, config_csp):
         epochs_2_clean = mask(epochs_2_band)
         print("Clean epochs shape: ", epochs_1_clean.shape, epochs_2_clean.shape)
 
-        projForward, projInverse, evals = compute_csp(epochs_1_clean, epochs_2_clean, config_csp)
+        spatial_filters, spatial_patterns, evals = compute_csp(epochs_1_clean, epochs_2_clean, config_csp)
         source_filename = Path(full_path).parts[-1]
         rob = "robust" if config_csp["robust"] else "standard"
         con = "concat" if config_csp["concat"] else "mean"
@@ -78,8 +78,8 @@ def process_record(full_path, folder_output, config, config_csp):
             f"MATRIX_{band}_{rob}_{con}+reg{config_csp['alpha']}_" + source_filename[len("EPOCHS") + 1 :],
         )
         with File(matrix_filename, "w") as h5f:
-            h5f.create_dataset("projInverse", data=projInverse)
-            h5f.create_dataset("projForward", data=projForward)
+            h5f.create_dataset("projForward", data=spatial_patterns)
+            h5f.create_dataset("projInverse", data=spatial_filters)
             h5f.create_dataset("evals", data=evals)
 
             config_str = json.dumps(config)
@@ -90,14 +90,14 @@ def process_record(full_path, folder_output, config, config_csp):
             print("output file -> ", matrix_filename)
 
         assessment_df = build_component_assessment_table(
-            proj_inverse=projInverse,
+            spatial_patterns=spatial_patterns,
             evals=evals,
             metadata_csp=metadata_csp,
             session=Path(matrix_filename).parts[-2],
             filename=Path(matrix_filename).name,
         )
         save_component_assessment_table(assessment_df, folder_output, Path(matrix_filename).name)
-        component_scores = build_component_assessment(projInverse, evals)
+        component_scores = build_component_assessment(spatial_patterns, evals)
 
         parts = Path(full_path).parts
         plot_folder_name = "CSP_components_clear" if config_csp.get("same_vlim", True) else "CSP_components"
@@ -105,7 +105,7 @@ def process_record(full_path, folder_output, config, config_csp):
         os.makedirs(folder, exist_ok=True)
         reg = f"reg{config_csp['alpha']}_" if config_csp["regularization"] else ""
         output_filename = os.path.join(folder, f"{band}_{rob}_{con}+_{reg}" + source_filename[len("EPOCHS") + 1 : -4] + ".png")
-        plot_10_comp(evals, projInverse, band, output_filename, config_csp, component_scores)
+        plot_10_comp(evals, spatial_patterns, band, output_filename, config_csp, component_scores)
 
 
 def process_records_csp(folder_input, records, folder_output, config, config_csp):

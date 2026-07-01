@@ -28,6 +28,7 @@ BAD_CHANNELS = ["FT9", "TP9", "T7", "AF7", "AF8", "FT10", "TP10", "T8"]
 MONTAGE_PATH = r"resources/mks64_standard.ced"
 CSP_COLORMAP = "jet"
 DEFAULT_OUTPUT_FOLDER = "best_band_component_pairs"
+BRIER_SCORE_PENALTY_L = float(getattr(Settings(), "brier_score_penalty_L", 5.0))
 SUMMARY_COLUMNS = [
     "session",
     "record",
@@ -178,8 +179,9 @@ def prepare_pair_scores(cv_scores_path, df_components):
         return df_cv
 
     df_cv["components"] = df_cv["sel_comp"].apply(parse_components)
+    brier_score = pd.to_numeric(df_cv["brier score"], errors="coerce")
     df_cv["ranking_score"] = df_cv["component_assessment_score"] * (
-        2 - pd.to_numeric(df_cv["brier score"], errors="coerce")
+        1 + 1 / (1 + BRIER_SCORE_PENALTY_L * brier_score)
     )
     return df_cv.sort_values(["ranking_score"], ascending=[False], ignore_index=True)
 
@@ -217,7 +219,7 @@ def save_components_plot(matrix_path, band, components, output_path, xy, row):
     from mne.viz import plot_topomap
 
     with File(matrix_path, "r") as h5f:
-        patterns = h5f["projInverse"][:]
+        patterns = h5f["projForward"][:]
         evals = h5f["evals"][:]
 
     n_components = patterns.shape[1]
@@ -319,7 +321,7 @@ def save_probability_plot(epochs_path, matrix_path, row, band, components, outpu
         labels = h5f["labels"][:].squeeze().astype(int)
 
     with File(matrix_path, "r") as h5f:
-        spatial_filters = h5f["projForward"][:]
+        spatial_filters = h5f["projInverse"][:]
 
     features = build_probability_features(epochs, spatial_filters, band, components, fs)
     classifier = LDA()

@@ -26,7 +26,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.metrics import brier_score_loss
-from scipy.signal import butter
+from scipy.signal import butter, welch
 
 
 from settings.settings import Settings
@@ -330,10 +330,17 @@ class MainWindow(QMainWindow):
     def widgets_results(self):
         self.components_table = self._create_results_table()
         self.pair_scores_table = self._create_results_table()
+        self.classifier_type_combo = QComboBox()
+        self.classifier_type_combo.addItem("CSP log-variance", "csp")
+        self.classifier_type_combo.addItem("CSP spectral power", "csp_spectral_power")
+        self.spectral_freqs_edit = QLineEdit(getattr(self.settings, "classifier_spectral_freqs", "9, 10, 11, 19, 20, 21"))
+        self.spectral_freqs_edit.setPlaceholderText("9, 10, 11, 19, 20, 21")
         self.classifier_path_edit = QLineEdit()
         self.classifier_path_edit.setPlaceholderText("models/{project}/{stage}/{session}/feat{components}_{band}_{record_stem}.json")
         self._classifier_path_auto = True
         self.button_save_classifier = create_button("Сохранить классификатор")
+        self.button_calculate_classifier = create_button("Рассчитать классификатор")
+        self.button_plot_component_spectra = create_button("Построить спектры компонент")
         self.best_pair_label = QLabel("Subject -. Record -. Band -. Components -. Component assessment score: -. Balanced accuracy: -. Brier score: -. Ranking score: -.")
         self.best_pair_label.setWordWrap(True)
         self.best_pair_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
@@ -429,6 +436,10 @@ class MainWindow(QMainWindow):
         right_panel.addLayout(bands_main_layout)
         right_panel.addWidget(self.button_calculate_csp)
         right_panel.addWidget(self.button_show_csp_plot)
+        right_panel.addLayout(create_hbox([QLabel("Тип признаков:"), self.classifier_type_combo]))
+        right_panel.addLayout(create_hbox([QLabel("Частоты PSD:"), self.spectral_freqs_edit]))
+        right_panel.addWidget(self.button_calculate_classifier)
+        right_panel.addWidget(self.button_plot_component_spectra)
         right_panel.addLayout(create_hbox([QLabel("Путь классификатора:"), self.classifier_path_edit]))
         right_panel.addWidget(self.button_save_classifier)
         right_panel.addWidget(QLabel("Лучшая пара компонент-диапазон"))
@@ -459,6 +470,10 @@ class MainWindow(QMainWindow):
         self.button_calculate_csp.clicked.connect(self.on_calc_csp)
         self.button_show_csp_plot.clicked.connect(self.on_show_csp_components_plot)
         self.button_save_classifier.clicked.connect(self.on_save_classifier)
+        self.button_calculate_classifier.clicked.connect(self.on_calculate_classifier)
+        self.button_plot_component_spectra.clicked.connect(self.on_plot_selected_component_spectra)
+        self.classifier_type_combo.currentIndexChanged.connect(self.on_classifier_feature_settings_changed)
+        self.spectral_freqs_edit.editingFinished.connect(self.on_classifier_feature_settings_changed)
         self.classifier_path_edit.textEdited.connect(self._mark_classifier_path_manual)
         self.checkbox_regul.stateChanged.connect(
             lambda: self.spin_box_regul_alpha.setEnabled(self.checkbox_regul.isChecked())
@@ -639,6 +654,10 @@ class MainWindow(QMainWindow):
         s = self.settings
         return os.path.join(r"results", s.project, s.stage, s.session, "PROBA_selected")
 
+    def _folder_component_spectra_plots(self):
+        s = self.settings
+        return os.path.join(r"results", s.project, s.stage, s.session, "CSP_component_spectra")
+
     def _folder_final_probability_plots(self):
         s = self.settings
         return os.path.join(r"results", s.project, s.stage, s.session, "PROBA_final")
@@ -734,12 +753,51 @@ class MainWindow(QMainWindow):
             return pd.DataFrame()
 
         df_scores = pd.concat([pd.read_excel(file) for file in files], ignore_index=True)
+        df_scores = self._filter_scores_for_selected_features(df_scores)
         return self._average_cv_scores_across_folds(df_scores)
+
+    def _spectral_freqs_key(self, freqs=None):
+        if freqs is None:
+            freqs = self._parse_spectral_feature_freqs()
+        return json.dumps([float(freq) for freq in freqs])
+
+    def _normalize_spectral_freqs_key(self, value):
+        if pd.isna(value):
+            return "[]"
+        try:
+            if isinstance(value, str):
+                values = json.loads(value)
+            else:
+                values = value
+            return json.dumps([float(freq) for freq in values])
+        except Exception:
+            return str(value)
+
+    def _filter_scores_for_selected_features(self, df):
+        if df is None or df.empty:
+            return df
+
+        df = df.copy()
+        if "features_type" not in df.columns:
+            df["features_type"] = "csp"
+        if "spectral_freqs" not in df.columns:
+            df["spectral_freqs"] = "[]"
+
+        feature_type = self._selected_classifier_feature_type()
+        df = df[df["features_type"].fillna("csp").astype(str) == feature_type].copy()
+        if feature_type == "csp_spectral_power":
+            try:
+                freq_key = self._spectral_freqs_key()
+            except ValueError:
+                return df.iloc[0:0].copy()
+            df = df[df["spectral_freqs"].apply(self._normalize_spectral_freqs_key) == freq_key].copy()
+        return df
 
     def _sort_pair_scores(self, df):
         if df is None or df.empty:
             return df
 
+        df = self._ensure_ranking_score(df)
         if "ranking_score" in df.columns:
             sort_columns = ["ranking_score"]
             ascending = [False]
@@ -776,7 +834,7 @@ class MainWindow(QMainWindow):
 
         group_columns = [
             column
-            for column in ["session", "record", "classifier", "band", "pipeline", "sel_comp"]
+            for column in ["session", "record", "classifier", "features_type", "spectral_freqs", "band", "pipeline", "sel_comp"]
             if column in df_scores.columns
         ]
         numeric_columns = [
@@ -828,6 +886,8 @@ class MainWindow(QMainWindow):
         if df_top.empty:
             return None
 
+        df_top = self._ensure_ranking_score(df_top)
+        df_top = self._sort_pair_scores(df_top)
         return df_top.iloc[0]
 
     def _read_best_pair_row_from_all_results(self):
@@ -840,6 +900,10 @@ class MainWindow(QMainWindow):
         except Exception:
             return None
 
+        if df_best.empty:
+            return None
+
+        df_best = self._filter_scores_for_selected_features(df_best)
         if df_best.empty:
             return None
 
@@ -889,6 +953,10 @@ class MainWindow(QMainWindow):
         except Exception:
             return pd.DataFrame()
 
+        if df_best.empty:
+            return pd.DataFrame()
+
+        df_best = self._filter_scores_for_selected_features(df_best)
         if df_best.empty:
             return pd.DataFrame()
 
@@ -962,9 +1030,7 @@ class MainWindow(QMainWindow):
             lambda row: self._score_selected_components(row, component_scores_by_band),
             axis=1,
         )
-        if "component_assessment_score" in df_cv.columns and "brier score" in df_cv.columns:
-            df_cv["ranking_score"] = df_cv["component_assessment_score"] * (2 - df_cv["brier score"])
-        return df_cv
+        return self._ensure_ranking_score(df_cv)
 
     def _component_scores_by_band(self, df_components):
         scores_by_band = {}
@@ -1005,11 +1071,13 @@ class MainWindow(QMainWindow):
     def _ensure_ranking_score(self, df):
         if df is None or df.empty:
             return df
-        if "ranking_score" not in df.columns and {"component_assessment_score", "brier score"}.issubset(df.columns):
+        if {"component_assessment_score", "brier score"}.issubset(df.columns):
             df = df.copy()
+            penalty_l = float(getattr(self.settings, "brier_score_penalty_L", 5.0))
+            brier_score = pd.to_numeric(df["brier score"], errors="coerce")
             df["ranking_score"] = (
                 pd.to_numeric(df["component_assessment_score"], errors="coerce")
-                * (2 - pd.to_numeric(df["brier score"], errors="coerce"))
+                * (1 + 1 / (1 + penalty_l * brier_score))
             )
         return df
 
@@ -1114,6 +1182,71 @@ class MainWindow(QMainWindow):
         epochs_csp = np.array([epoch @ spatial_filters[:, components] for epoch in epochs_band])
         return get_csp_features(epochs_csp)
 
+    def _selected_classifier_feature_type(self):
+        feature_type = self.classifier_type_combo.currentData()
+        return feature_type or "csp"
+
+    def _parse_spectral_feature_freqs(self):
+        text = self.spectral_freqs_edit.text().strip()
+        if not text:
+            raise ValueError("Укажите частоты PSD для спектрального классификатора.")
+
+        values = []
+        for part in text.replace(";", ",").replace(" ", ",").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                values.append(float(part))
+            except ValueError as exc:
+                raise ValueError(f"Не удалось прочитать частоту PSD: {part}") from exc
+
+        if not values:
+            raise ValueError("Укажите хотя бы одну частоту PSD.")
+        if any(value <= 0 for value in values):
+            raise ValueError("Частоты PSD должны быть положительными.")
+        return values
+
+    def _project_epochs_for_spectral_features(self, epochs, spatial_filters, components):
+        config = self._build_preprocess_config()
+        high = min(40, config["Fs"] / 2 - 1)
+        epochs_basic = np.array(
+            [
+                bandpass_filter(epoch, fs=config["Fs"], low=1, high=high)[0]
+                for epoch in epochs
+            ]
+        )
+        return np.array([epoch @ spatial_filters[:, components] for epoch in epochs_basic])
+
+    def _calculate_component_psd(self, epochs_csp):
+        config = self._build_preprocess_config()
+        nperseg = min(int(2 * config["Fs"]), epochs_csp.shape[1])
+        freqs, psd = welch(epochs_csp, fs=config["Fs"], nperseg=nperseg, axis=1)
+        return freqs, psd
+
+    def _build_spectral_power_features(self, epochs, spatial_filters, components, feature_freqs):
+        epochs_csp = self._project_epochs_for_spectral_features(epochs, spatial_filters, components)
+        freqs, psd = self._calculate_component_psd(epochs_csp)
+        max_freq = float(freqs[-1])
+        if any(freq > max_freq for freq in feature_freqs):
+            raise ValueError(f"PSD частоты должны быть <= {max_freq:.1f} Hz.")
+
+        freq_indices = [int(np.argmin(np.abs(freqs - freq))) for freq in feature_freqs]
+        features = psd[:, freq_indices, :]
+        features = np.transpose(features, (0, 2, 1))
+        return features.reshape(features.shape[0], -1)
+
+    def _build_classifier_features(self, epochs, spatial_filters, band, components):
+        feature_type = self._selected_classifier_feature_type()
+        spectral_freqs = []
+        if feature_type == "csp_spectral_power":
+            spectral_freqs = self._parse_spectral_feature_freqs()
+            features = self._build_spectral_power_features(epochs, spatial_filters, components, spectral_freqs)
+        else:
+            feature_type = "csp"
+            features = self._build_probability_features(epochs, spatial_filters, band, components)
+        return features, feature_type, spectral_freqs
+
     def _mark_classifier_path_manual(self, *_):
         self._classifier_path_auto = False
 
@@ -1204,16 +1337,16 @@ class MainWindow(QMainWindow):
         labels = labels[good_epoch_mask]
 
         with File(matrix_path, "r") as h5f:
-            spatial_filters = h5f["projForward"][:]
-            spatial_patterns = h5f["projInverse"][:]
+            spatial_patterns = h5f["projForward"][:]
+            spatial_filters = h5f["projInverse"][:]
 
-        features = self._build_probability_features(epochs, spatial_filters, band, components)
+        features, feature_type, spectral_freqs = self._build_classifier_features(epochs, spatial_filters, band, components)
         classifier = LDA()
         classifier.fit(features, labels)
-        return classifier, spatial_filters, spatial_patterns, band, components, features, labels
+        return classifier, spatial_filters, spatial_patterns, band, components, features, labels, feature_type, spectral_freqs
 
     def _save_classifier_for_row(self, row, output_path):
-        classifier, spatial_filters, _, band, components, _, _ = self._train_classifier_for_row(row)
+        classifier, spatial_filters, _, band, components, _, _, feature_type, spectral_freqs = self._train_classifier_for_row(row)
         config = self._build_preprocess_config()
 
         sos_basic = butter(
@@ -1235,7 +1368,11 @@ class MainWindow(QMainWindow):
             "sos_basic": sos_basic.tolist(),
             "sos": sos.tolist(),
             "band": [float(value) for value in band],
-            "features_type": "csp",
+            "features_type": feature_type,
+            "spectral_freqs": [float(value) for value in spectral_freqs],
+            "spectral_feature_order": "component_major",
+            "uses_band_filter_for_features": feature_type == "csp",
+            "n_features": int(classifier.coef_.shape[1]),
             "Cref": None,
             "inv_sqrt": None,
             "w_lda": classifier.coef_[0].tolist(),
@@ -1250,7 +1387,7 @@ class MainWindow(QMainWindow):
         return output_path
 
     def _save_final_classifier_and_probability_plot(self, row, output_path, plot_output_path):
-        classifier, spatial_filters, _, band, components, features, labels = self._train_classifier_for_row(row)
+        classifier, spatial_filters, _, band, components, features, labels, feature_type, spectral_freqs = self._train_classifier_for_row(row)
         config = self._build_preprocess_config()
 
         sos_basic = butter(
@@ -1272,7 +1409,11 @@ class MainWindow(QMainWindow):
             "sos_basic": sos_basic.tolist(),
             "sos": sos.tolist(),
             "band": [float(value) for value in band],
-            "features_type": "csp",
+            "features_type": feature_type,
+            "spectral_freqs": [float(value) for value in spectral_freqs],
+            "spectral_feature_order": "component_major",
+            "uses_band_filter_for_features": feature_type == "csp",
+            "n_features": int(classifier.coef_.shape[1]),
             "Cref": None,
             "inv_sqrt": None,
             "w_lda": classifier.coef_[0].tolist(),
@@ -1318,9 +1459,9 @@ class MainWindow(QMainWindow):
         labels = labels[good_epoch_mask]
 
         with File(matrix_path, "r") as h5f:
-            spatial_filters = h5f["projForward"][:]
+            spatial_filters = h5f["projInverse"][:]
 
-        features = self._build_probability_features(epochs, spatial_filters, band, components)
+        features, feature_type, _ = self._build_classifier_features(epochs, spatial_filters, band, components)
         classifier = LDA()
         classifier.fit(features, labels)
         y_proba = classifier.predict_proba(features)[:, 1]
@@ -1331,13 +1472,81 @@ class MainWindow(QMainWindow):
         if "brier score" in row.index and pd.notna(row["brier score"]):
             title_scores = f"CV Brier = {float(row['brier score']):.3f}. {title_scores}"
         fig.suptitle(
-            f"{self.settings.session}. {record_stem}. Band {band}. Components {tuple(components)}. "
+            f"{self.settings.session}. {record_stem}. {feature_type}. Band {band}. Components {tuple(components)}. "
             f"{title_scores}"
         )
 
         band_text = str([int(x) if float(x).is_integer() else x for x in band])
         components_text = "_".join(str(component) for component in components)
         folder_output = Path(self._folder_probability_plots())
+        folder_output.mkdir(parents=True, exist_ok=True)
+        output_path = folder_output / f"{band_text}_{components_text}_{record_stem}.png"
+        fig.savefig(output_path, dpi=300, bbox_inches="tight")
+        close(fig)
+        return output_path
+
+    def _save_component_spectra_plot_for_row(self, row):
+        if row is None:
+            raise ValueError("Выберите строку в таблице Cross-validation scores.")
+
+        band = self._coerce_band_value(row["band"])
+        components = self._coerce_components_value(self._row_components(row))
+        if band is None or not components:
+            raise ValueError("Не удалось прочитать band/components для выбранной строки.")
+
+        feature_freqs = self._parse_spectral_feature_freqs()
+        dataset_path = self._find_epochs_dataset_path(row)
+        if dataset_path is None or not dataset_path.exists():
+            raise FileNotFoundError("Не найден EPOCHS-файл для выбранной записи.")
+
+        record_stem = self._record_stem_from_row(row) or dataset_path.stem[len("EPOCHS_") :]
+        matrix_path = self._find_csp_matrix(band, record_stem=record_stem)
+        if matrix_path is None:
+            raise FileNotFoundError(f"Не найдена CSP matrix для band {band} и record {record_stem}.")
+
+        with File(dataset_path, "r") as h5f:
+            epochs = h5f["epochs"][:]
+            labels = h5f["labels"][:].squeeze().astype(int)
+            good_epoch_mask = read_good_epoch_mask(h5f, len(epochs))
+        epochs = epochs[good_epoch_mask]
+        labels = labels[good_epoch_mask]
+
+        with File(matrix_path, "r") as h5f:
+            spatial_filters = h5f["projInverse"][:]
+
+        epochs_csp = self._project_epochs_for_spectral_features(epochs, spatial_filters, components)
+        freqs, psd = self._calculate_component_psd(epochs_csp)
+        max_plot_freq = max(40.0, max(feature_freqs) + 2.0)
+        plot_mask = freqs <= min(max_plot_freq, freqs[-1])
+        class_values = sorted(np.unique(labels))
+
+        fig = Figure(figsize=(7.5, max(2.8, 2.2 * len(components))), dpi=100)
+        axes = fig.subplots(len(components), 1, squeeze=False)[:, 0]
+        for comp_index, (component, ax) in enumerate(zip(components, axes)):
+            for class_value in class_values:
+                class_mask = labels == class_value
+                if not np.any(class_mask):
+                    continue
+                mean_psd = psd[class_mask, :, comp_index].mean(axis=0)
+                ax.plot(freqs[plot_mask], mean_psd[plot_mask], linewidth=1.4, label=f"class {class_value}")
+
+            for freq in feature_freqs:
+                ax.axvline(freq, color="crimson", linestyle="--", linewidth=0.8, alpha=0.65)
+            ax.set_title(f"CSP#{component}")
+            ax.set_xlabel("Frequency, Hz")
+            ax.set_ylabel("PSD")
+            ax.grid(True, alpha=0.25)
+            ax.legend(loc="upper right")
+
+        fig.suptitle(
+            f"{self.settings.session}. {record_stem}. Band {band}. Components {tuple(components)}. "
+            f"PSD frequencies: {feature_freqs}"
+        )
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
+
+        band_text = str([int(x) if float(x).is_integer() else x for x in band])
+        components_text = "_".join(str(component) for component in components)
+        folder_output = Path(self._folder_component_spectra_plots())
         folder_output.mkdir(parents=True, exist_ok=True)
         output_path = folder_output / f"{band_text}_{components_text}_{record_stem}.png"
         fig.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -1366,7 +1575,7 @@ class MainWindow(QMainWindow):
 
         try:
             with File(matrix_path, "r") as h5f:
-                patterns = h5f["projInverse"][:]
+                patterns = h5f["projForward"][:]
                 evals = h5f["evals"][:]
         except Exception as exc:
             self._draw_empty_best_components_plot(f"Could not load CSP matrix:\n{exc}")
@@ -1526,7 +1735,6 @@ class MainWindow(QMainWindow):
             self._pair_scores_best_df = self._sort_pair_scores(self._pair_scores_view_df.copy())
             best_pair_text = self._read_best_pair_text()
         except Exception as exc:
-            print(f"Не удалось загрузить cross-validation scores: {exc}")
             self.best_pair_label.setText("Subject -. Record -. Band -. Components -. Component assessment score: -. Balanced accuracy: -. Brier score: -. Ranking score: -.")
             self._draw_empty_best_components_plot("No component plot selected.")
             self._pair_scores_view_df = pd.DataFrame()
@@ -1574,25 +1782,18 @@ class MainWindow(QMainWindow):
             return
 
         row = self._read_best_pair_row()
-        if row is None:
-            print("Автосохранение классификатора: лучшая пара не найдена.")
-            return
-
         self._update_classifier_output_path(row=row, force=True)
-        output_path_text = self.classifier_path_edit.text().strip()
-
-        try:
-            output_path = self._save_classifier_for_row(row, output_path_text)
-        except Exception as exc:
-            print(f"Автосохранение классификатора не выполнено: {exc}")
-            return
-
-        self.classifier_path_edit.setText(str(output_path))
-        print(f"Автосохранение классификатора: {output_path}")
 
     def on_pair_score_selected(self):
         self._update_best_components_plot()
         self._update_classifier_output_path()
+
+    def on_classifier_feature_settings_changed(self):
+        self.pair_scores_table.clearSelection()
+        self._pair_scores_view_df = pd.DataFrame()
+        self._pair_scores_best_df = pd.DataFrame()
+        self.refresh_csp_results()
+        self._update_classifier_output_path(force=True)
 
     def _score_component_groups(self, df_components):
         output_columns = ["band", "components", "absolute_components", "component_assessment_score"]
@@ -1873,12 +2074,17 @@ class MainWindow(QMainWindow):
 
     def _build_cv_config(self):
         feature_groups = sorted(COMPONENT_GROUP_TEMPLATES, key=lambda group: (len(group), group))
-        return {
+        feature_type = self._selected_classifier_feature_type()
+        config = {
             "n_splits": 3,
             "test_size": 5,
             "feature_groups": feature_groups,
             "classifier": "lda",
+            "features_type": feature_type,
         }
+        if feature_type == "csp_spectral_power":
+            config["spectral_freqs"] = self._parse_spectral_feature_freqs()
+        return config
 
     def _build_cv_config_for_record(self, record_name):
         config_cv = self._build_cv_config()
@@ -1924,11 +2130,17 @@ class MainWindow(QMainWindow):
             required_columns = {"pipeline", "session", "record", "classifier", "band", "sel_comp"}
             if not required_columns.issubset(df.columns):
                 continue
+            df = self._filter_scores_for_selected_features(df)
             df_fair = df[df["pipeline"] == "split_before_csp"].copy()
             if df_fair.empty:
                 continue
+            group_columns = [
+                column
+                for column in ["session", "record", "classifier", "features_type", "spectral_freqs", "band", "sel_comp"]
+                if column in df_fair.columns
+            ]
             rows.append(
-                df_fair.groupby(["session", "record", "classifier", "band", "sel_comp"], as_index=False)
+                df_fair.groupby(group_columns, as_index=False)
                 .agg(
                     folds=("fold", "nunique"),
                     balanced_accuracy_mean=("balanced accuracy", "mean"),
@@ -1964,6 +2176,7 @@ class MainWindow(QMainWindow):
             return pd.DataFrame()
 
         df = pd.read_excel(cv_scores_path)
+        df = self._filter_scores_for_selected_features(df)
         record_value = Path(record_name[len("EPOCHS_") :]).name if record_name.startswith("EPOCHS_") else record_name
         if "pipeline" in df.columns:
             df = df[df["pipeline"] == "split_before_csp"].copy()
@@ -1973,11 +2186,8 @@ class MainWindow(QMainWindow):
             return df
 
         summary = self._average_cv_scores_across_folds(df)
-        return summary.sort_values(
-            ["balanced accuracy", "brier score"],
-            ascending=[False, True],
-            ignore_index=True,
-        ).head(top_n)
+        summary = self._attach_component_assessment_scores(summary)
+        return self._sort_pair_scores(summary).head(top_n)
 
     def _save_final_models_for_records(self, records, top_n=3):
         saved_paths = []
@@ -2001,7 +2211,8 @@ class MainWindow(QMainWindow):
                 band = self._coerce_band_value(row["band"])
                 components = self._coerce_components_value(self._row_components(row))
                 band_text = json.dumps([int(value) if float(value).is_integer() else value for value in band])
-                output_name = f"rank{rank}_feat{tuple(components)}_{band_text}_{record_stem}.json"
+                feature_type = str(row.get("features_type", self._selected_classifier_feature_type()))
+                output_name = f"rank{rank}_{feature_type}_feat{tuple(components)}_{band_text}_{record_stem}.json"
                 model_path = folder_models / output_name
                 plot_path = folder_proba / f"{model_path.stem}.png"
                 saved_model, saved_plot = self._save_final_classifier_and_probability_plot(row, model_path, plot_path)
@@ -2021,7 +2232,7 @@ class MainWindow(QMainWindow):
         for matrix_path in sorted(folder_csp.glob("MATRIX_*.hdf")):
             try:
                 with File(matrix_path, "r") as h5f:
-                    proj_inverse = h5f["projInverse"][:]
+                    spatial_patterns = h5f["projForward"][:]
                     evals = h5f["evals"][:]
                     metadata_raw = h5f["metadata_csp"][()] if "metadata_csp" in h5f else None
             except Exception as exc:
@@ -2038,7 +2249,7 @@ class MainWindow(QMainWindow):
                     metadata_csp = {}
 
             band = metadata_csp.get("band")
-            component_scores = build_component_assessment(proj_inverse, evals)
+            component_scores = build_component_assessment(spatial_patterns, evals)
             filename = matrix_path.name[len("MATRIX_") :]
             if filename.endswith(".hdf"):
                 filename = filename[:-4] + ".png"
@@ -2050,7 +2261,7 @@ class MainWindow(QMainWindow):
             for output_path, same_vlim in outputs:
                 fig = plot_10_csp_components(
                     abs(evals),
-                    proj_inverse,
+                    spatial_patterns,
                     xy,
                     component_scores=component_scores,
                     same_vlim=same_vlim,
@@ -2100,21 +2311,53 @@ class MainWindow(QMainWindow):
         s = self.settings
         folder_input = self._current_dataset_folder
         folder_output = os.path.join(r"data", s.project, "features", "csp", s.stage, s.session)
-        folder_cv_output = self._folder_cv_scores()
         os.makedirs(folder_output, exist_ok=True)
-        os.makedirs(folder_cv_output, exist_ok=True)
 
         try:
             from scripts.calculate_csp import process_records_csp
-            from scripts.cross_validated_test import process_records_cross_validated
-
             print("Расчет CSP с текущими настройками")
             print("config_csp:", config_csp)
             process_records_csp(folder_input, records, folder_output, config, config_csp)
             saved_csp_images = self._redraw_csp_component_images()
             print(f"CSP-картинки сохранены: {saved_csp_images}")
 
+        except Exception as exc:
+            QMessageBox.critical(self, "Ошибка расчета CSP", str(exc))
+            raise
+
+        self.refresh_csp_results()
+        QMessageBox.information(
+            self,
+            "CSP",
+            f"CSP рассчитан для файлов: {len(records)}\nРезультаты сохранены в {folder_output}",
+        )
+
+    def on_calculate_classifier(self):
+        selected_items = self.dataset_list.selectedItems()
+        records = [item.text() for item in selected_items]
+
+        if len(records) == 0:
+            QMessageBox.warning(self, "Классификатор", "Сначала выберите хотя бы один EPOCHS-файл.")
+            return
+
+        try:
+            config = self._build_preprocess_config()
+            config_csp = self._build_csp_config()
+            base_config_cv = self._build_cv_config()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Классификатор", str(exc))
+            return
+
+        folder_input = self._current_dataset_folder
+        folder_cv_output = self._folder_cv_scores()
+        os.makedirs(folder_cv_output, exist_ok=True)
+
+        try:
+            from scripts.cross_validated_test import process_records_cross_validated
+
             print("Расчет cross-validation таблиц")
+            print("features_type:", base_config_cv.get("features_type"))
+            print("spectral_freqs:", base_config_cv.get("spectral_freqs", []))
             for record in records:
                 config_cv = self._build_cv_config_for_record(record)
                 print(f"Feature groups for {record}: {config_cv['feature_groups']}")
@@ -2130,14 +2373,14 @@ class MainWindow(QMainWindow):
             self._save_fair_cv_summary()
             self._save_final_models_for_records(records, top_n=3)
         except Exception as exc:
-            QMessageBox.critical(self, "Ошибка расчета CSP", str(exc))
+            QMessageBox.critical(self, "Классификатор", str(exc))
             raise
 
         self.refresh_csp_results()
         QMessageBox.information(
             self,
-            "CSP",
-            f"CSP рассчитан для файлов: {len(records)}\nРезультаты сохранены в {folder_output}",
+            "Классификатор",
+            f"Классификаторы рассчитаны для файлов: {len(records)}",
         )
 
     def _band_text_variants(self, band):
@@ -2249,6 +2492,27 @@ class MainWindow(QMainWindow):
             output_path = self._save_probability_plot_for_row(row)
         except Exception as exc:
             QMessageBox.warning(self, "Вероятности", str(exc))
+            return
+
+        try:
+            os.startfile(str(output_path))
+        except AttributeError:
+            subprocess.Popen(["xdg-open", str(output_path)])
+
+    def on_plot_selected_component_spectra(self):
+        row = self._read_selected_pair_row_from_table()
+        if row is None:
+            QMessageBox.warning(
+                self,
+                "CSP spectra",
+                "Выберите строку в таблице Cross-validation scores.",
+            )
+            return
+
+        try:
+            output_path = self._save_component_spectra_plot_for_row(row)
+        except Exception as exc:
+            QMessageBox.warning(self, "CSP spectra", str(exc))
             return
 
         try:

@@ -39,15 +39,14 @@ def compute_csp(epochs1, epochs2, config):
 
     eigvals, B = la.eigh(S1)
 
-    W = P @ B       # W [channels, components]
+    W = P @ B       # spatial filters [channels, components]
 
     # сортировка
     order = np.argsort(eigvals)
     W = W[:, order]
     eigvals = eigvals[order]    # min - class 1, max - class 2
 
-    # spatial patterns
-    A = la.pinv(W).T    # A [channels, components]
+    A = la.pinv(W).T    # spatial patterns [channels, components]
 
     return W, A, eigvals
 
