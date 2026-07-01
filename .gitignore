@@ -2,6 +2,6 @@ data/
 venv/
 __pycache__/
 *.pyc
-results
+results/
 resources/
 #/pr_Agency_EBCI/test/CSP_components_eigenvalues
