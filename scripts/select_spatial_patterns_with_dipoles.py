@@ -26,7 +26,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import StratifiedKFold, cross_val_predict
+from sklearn.model_selection import TimeSeriesSplit
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -411,19 +411,62 @@ def features_for_components(epochs, spatial_filters, band, components, fs):
     return get_csp_features(epochs_csp)
 
 
-def classifier_predictions(features, labels, cv_splits, random_state):
+def build_time_series_folds(labels, n_splits, test_size):
+    labels = np.asarray(labels).astype(int)
+    class_values = np.sort(np.unique(labels))
+    if len(class_values) != 2:
+        raise ValueError("Exactly two classes are required for CSP cross-validation.")
+
+    splitter = TimeSeriesSplit(n_splits=n_splits, test_size=test_size)
+    class_indices = {value: np.where(labels == value)[0] for value in class_values}
+
+    split_per_class = {}
+    for value, indices in class_indices.items():
+        dummy = np.zeros(len(indices))
+        split_per_class[value] = list(splitter.split(dummy))
+
+    folds = []
+    for fold_idx in range(n_splits):
+        train_parts = []
+        test_parts = []
+        for value in class_values:
+            train_pos, test_pos = split_per_class[value][fold_idx]
+            train_parts.append(class_indices[value][train_pos])
+            test_parts.append(class_indices[value][test_pos])
+
+        train_idx = np.sort(np.concatenate(train_parts))
+        test_idx = np.sort(np.concatenate(test_parts))
+        folds.append((train_idx, test_idx))
+
+    return folds
+
+
+def classifier_predictions(features, labels, cv_splits, cv_test_size):
     class_counts = np.unique(labels, return_counts=True)[1]
-    n_splits = min(cv_splits, int(class_counts.min()))
+    max_splits = int((class_counts.min() - 1) // cv_test_size)
+    n_splits = min(cv_splits, max_splits)
     if n_splits < 2:
-        raise ValueError("Need at least two epochs per class for cross-validated probabilities.")
+        raise ValueError(
+            "Need enough epochs per class for time-series cross-validation: "
+            f"min class count={int(class_counts.min())}, test_size={cv_test_size}."
+        )
+
+    folds = build_time_series_folds(labels=labels, n_splits=n_splits, test_size=cv_test_size)
+    y_proba = np.full(len(labels), np.nan, dtype=float)
+    y_pred = np.full(len(labels), -1, dtype=int)
+
+    for train_idx, test_idx in folds:
+        classifier = LDA()
+        classifier.fit(features[train_idx], labels[train_idx])
+        fold_proba = classifier.predict_proba(features[test_idx])[:, 1]
+        y_proba[test_idx] = fold_proba
+        y_pred[test_idx] = (fold_proba >= 0.5).astype(int)
 
     classifier = LDA()
-    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-    y_proba = cross_val_predict(classifier, features, labels, cv=cv, method="predict_proba")[:, 1]
-    y_pred = (y_proba >= 0.5).astype(int)
     classifier.fit(features, labels)
     y_proba_insample = classifier.predict_proba(features)[:, 1]
-    return y_pred, y_proba, y_proba_insample, n_splits
+    tested_mask = np.isfinite(y_proba)
+    return y_pred, y_proba, y_proba_insample, tested_mask, n_splits
 
 
 def safe_roc_auc(labels, y_proba):
@@ -451,7 +494,7 @@ def evaluate_component_sets(
     min_components,
     max_components,
     cv_splits,
-    random_state,
+    cv_test_size,
 ):
     band = metadata_csp.get("band")
     if band is None:
@@ -468,16 +511,19 @@ def evaluate_component_sets(
         for components in combinations(candidates, n_selected):
             components = list(components)
             features = features_for_components(epochs, spatial_filters, band, components, fs)
-            y_pred, y_proba, y_proba_insample, n_splits = classifier_predictions(
+            y_pred, y_proba, y_proba_insample, tested_mask, n_splits = classifier_predictions(
                 features=features,
                 labels=labels,
                 cv_splits=cv_splits,
-                random_state=random_state,
+                cv_test_size=cv_test_size,
             )
             component_scores = [float(score_by_component[component]) for component in components]
             component_score_mean = float(np.mean(component_scores))
-            brier = float(brier_score_loss(labels, y_proba))
-            balanced_accuracy = float(balanced_accuracy_score(labels, y_pred))
+            labels_test = labels[tested_mask]
+            y_pred_test = y_pred[tested_mask]
+            y_proba_test = y_proba[tested_mask]
+            brier = float(brier_score_loss(labels_test, y_proba_test))
+            balanced_accuracy = float(balanced_accuracy_score(labels_test, y_pred_test))
             ranking_score = float(
                 component_score_mean
                 * (1 + balanced_accuracy)
@@ -507,15 +553,18 @@ def evaluate_component_sets(
                     "component_score_sum": float(np.sum(component_scores)),
                     "component_score_min": float(np.min(component_scores)),
                     "classifier": "lda",
+                    "cv_method": "time_series_by_class",
                     "cv_splits": int(n_splits),
-                    "accuracy": float(accuracy_score(labels, y_pred)),
+                    "cv_test_size": int(cv_test_size),
+                    "cv_tested_epochs": int(tested_mask.sum()),
+                    "accuracy": float(accuracy_score(labels_test, y_pred_test)),
                     "balanced_accuracy": balanced_accuracy,
-                    "roc_auc": safe_roc_auc(labels, y_proba),
-                    "f1": float(f1_score(labels, y_pred, zero_division=0)),
-                    "recall": float(recall_score(labels, y_pred, zero_division=0)),
-                    "precision": float(precision_score(labels, y_pred, zero_division=0)),
+                    "roc_auc": safe_roc_auc(labels_test, y_proba_test),
+                    "f1": float(f1_score(labels_test, y_pred_test, zero_division=0)),
+                    "recall": float(recall_score(labels_test, y_pred_test, zero_division=0)),
+                    "precision": float(precision_score(labels_test, y_pred_test, zero_division=0)),
                     "brier_score": brier,
-                    "log_loss": safe_log_loss(labels, y_proba),
+                    "log_loss": safe_log_loss(labels_test, y_proba_test),
                     "ranking_score": ranking_score,
                 }
             )
@@ -723,7 +772,7 @@ def process_record(args):
             min_components=args.min_components,
             max_components=args.max_components,
             cv_splits=args.cv_splits,
-            random_state=args.random_state,
+            cv_test_size=args.cv_test_size,
         )
         if not df_rankings.empty:
             df_rankings.insert(0, "project", project)
@@ -781,7 +830,7 @@ def process_record(args):
             output_path=top_dir / "predicted_probability.png",
             labels=labels,
             y_proba=cache["y_proba"],
-            title=f"Cross-validated predicted probability, {title_suffix}",
+            title=f"Time-series cross-validated predicted probability, {title_suffix}",
         )
         plot_component_spectra(
             output_path=top_dir / "component_spectra.png",
@@ -843,8 +892,8 @@ def parse_args():
     )
     parser.add_argument("--min-components", type=int, default=2)
     parser.add_argument("--max-components", type=int, default=6)
-    parser.add_argument("--cv-splits", type=int, default=5)
-    parser.add_argument("--random-state", type=int, default=42)
+    parser.add_argument("--cv-splits", type=int, default=3)
+    parser.add_argument("--cv-test-size", type=int, default=5)
     return parser.parse_args()
 
 
