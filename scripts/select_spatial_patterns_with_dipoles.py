@@ -56,6 +56,16 @@ from src.analysis.features import get_csp_features  # noqa: E402
 from src.analysis.preprocessing import bandpass_filter, read_good_epoch_mask  # noqa: E402
 from src.utils.montage_processing import get_channel_names  # noqa: E402
 
+try:
+    from scripts.calculate_csp import config_csp as CURRENT_CSP_CONFIG  # noqa: E402
+except Exception:
+    CURRENT_CSP_CONFIG = {
+        "bands": [[8, 12], [9, 13], [10, 14], [8, 15]],
+        "robust": True,
+        "concat": True,
+        "regularization": False,
+        "alpha": 0.1,
+    }
 
 DEFAULT_PROJECT = "pr_Agency_EBCI"
 DEFAULT_STAGE = "test"
@@ -310,9 +320,61 @@ def read_matrix(matrix_path):
     return spatial_patterns, spatial_filters, eigvals, metadata_csp
 
 
-def discover_matrices(folder_csp, record, matrix_pattern):
+def normalize_band(band):
+    if band is None:
+        return tuple()
+    return tuple(float(value) for value in band)
+
+
+def current_csp_config(args):
+    config = dict(CURRENT_CSP_CONFIG)
+    if args.csp_alpha is not None:
+        config["alpha"] = args.csp_alpha
+    if args.csp_regularization is not None:
+        config["regularization"] = args.csp_regularization
+    return config
+
+
+def csp_metadata_matches_config(metadata_csp, config):
+    for key in ("robust", "concat", "regularization"):
+        if bool(metadata_csp.get(key)) != bool(config.get(key)):
+            return False
+
+    if float(metadata_csp.get("alpha", np.nan)) != float(config.get("alpha", np.nan)):
+        return False
+
+    expected_bands = {normalize_band(band) for band in config.get("bands", [])}
+    matrix_band = metadata_csp.get("band")
+    if expected_bands and normalize_band(matrix_band) not in expected_bands:
+        return False
+
+    return True
+
+
+def matrix_matches_current_csp_config(matrix_path, config):
+    try:
+        with File(matrix_path, "r") as h5f:
+            metadata_csp = read_json_dataset(h5f, "metadata_csp")
+    except Exception as exc:
+        print(f"  Skip {matrix_path.name}: cannot read metadata_csp ({exc}).")
+        return False
+
+    if not csp_metadata_matches_config(metadata_csp, config):
+        band = metadata_csp.get("band")
+        print(
+            f"  Skip {matrix_path.name}: CSP config mismatch "
+            f"(band={band}, regularization={metadata_csp.get('regularization')}, "
+            f"alpha={metadata_csp.get('alpha')})."
+        )
+        return False
+
+    return True
+
+
+def discover_matrices(folder_csp, record, matrix_pattern, config_csp):
     pattern = matrix_pattern.format(record=record)
-    return sorted(path for path in folder_csp.glob(pattern) if path.is_file())
+    candidates = sorted(path for path in folder_csp.glob(pattern) if path.is_file())
+    return [path for path in candidates if matrix_matches_current_csp_config(path, config_csp)]
 
 
 def record_stem_from_epoch_path(epoch_path):
@@ -604,9 +666,13 @@ def process_record(args):
         print(f"Skip {stage}/{subject}/{record}: CSP folder not found: {folder_csp}")
         return pd.DataFrame()
 
-    matrices = discover_matrices(folder_csp, record, args.matrix_pattern)
+    config_csp = current_csp_config(args)
+    matrices = discover_matrices(folder_csp, record, args.matrix_pattern, config_csp)
     if not matrices:
-        print(f"Skip {stage}/{subject}/{record}: no CSP matrices matched {args.matrix_pattern!r}.")
+        print(
+            f"Skip {stage}/{subject}/{record}: no CSP matrices matched "
+            f"{args.matrix_pattern!r} and current CSP config."
+        )
         return pd.DataFrame()
 
     epochs, labels, metadata = load_epochs_with_metadata(epochs_path)
@@ -760,6 +826,21 @@ def parse_args():
     )
     parser.add_argument("--output-folder", default=DEFAULT_OUTPUT_FOLDER)
     parser.add_argument("--eigenscore-method", default="logit", choices=["logit", "abs_diff"])
+    parser.add_argument(
+        "--csp-alpha",
+        type=float,
+        default=None,
+        help="Override current config_csp alpha for matrix metadata filtering.",
+    )
+    parser.add_argument(
+        "--csp-regularization",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "Override current config_csp regularization for matrix metadata filtering. "
+            "Default: use scripts.calculate_csp.config_csp."
+        ),
+    )
     parser.add_argument("--min-components", type=int, default=2)
     parser.add_argument("--max-components", type=int, default=6)
     parser.add_argument("--cv-splits", type=int, default=5)
