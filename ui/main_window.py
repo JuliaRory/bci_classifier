@@ -49,6 +49,8 @@ COMPONENT_GROUP_TEMPLATES = [
     (0, -2, -1),
     (0, 1, -2, -1),
 ]
+PREFERRED_DIPOLE_FINAL_SCORE = "final_score_5"
+COMP_SET_SCORE_BRIER_K = 10.0
 BAD_CHANNELS = ["FT9", "TP9", "T7", "AF7", "AF8", "FT10", "TP10", "T8"]
 MONTAGE_PATH = r"resources/mks64_standard.ced"
 VIRIDIS_BIG = cm.get_cmap("jet")
@@ -310,8 +312,8 @@ class MainWindow(QMainWindow):
         self.spin_box_regul_alpha.setEnabled(self.checkbox_regul.isChecked())
         self.combo_component_assessment = QComboBox()
         self.combo_component_assessment.addItem("Legacy score", "legacy")
-        self.combo_component_assessment.addItem("Dipole GOF score", "dipole")
-        assessment_algorithm = getattr(s, "component_assessment_algorithm", "legacy")
+        self.combo_component_assessment.addItem("Dipole GOF score (final_score_5)", "dipole")
+        assessment_algorithm = getattr(s, "component_assessment_algorithm", "dipole")
         assessment_index = self.combo_component_assessment.findData(assessment_algorithm)
         self.combo_component_assessment.setCurrentIndex(max(0, assessment_index))
         self.combo_eigenscore_method = QComboBox()
@@ -1115,12 +1117,14 @@ class MainWindow(QMainWindow):
             df_band = df_band.sort_values("selected_order")
 
         if self._selected_component_assessment_algorithm() == "dipole":
+            preferred_score_column = self._preferred_dipole_component_score_column(df_band)
+            if preferred_score_column is not None:
+                return pd.to_numeric(df_band[preferred_score_column], errors="coerce").to_numpy()
+
             recomputed_dipole_scores = self._recompute_dipole_component_scores(df_band)
             if recomputed_dipole_scores is not None:
                 return recomputed_dipole_scores
-            if "final_score" not in df_band.columns:
-                return None
-            return pd.to_numeric(df_band["final_score"], errors="coerce").to_numpy()
+            return None
 
         recomputed_scores = self._recompute_legacy_component_scores(df_band)
         if recomputed_scores is not None:
@@ -1159,32 +1163,49 @@ class MainWindow(QMainWindow):
             return pd.Series(default, index=df.index, dtype=float)
         return pd.to_numeric(df[column], errors="coerce").fillna(default)
 
-    def _recompute_dipole_component_scores(self, df_band):
-        if "evals" not in df_band.columns:
-            return None
+    def _preferred_dipole_component_score_column(self, df_band):
+        for column in (PREFERRED_DIPOLE_FINAL_SCORE, "final_score"):
+            if column in df_band.columns:
+                return column
+        return None
+
+    def _dipole_base_component_score(self, df_band):
+        if "weighted_local_sum" in df_band.columns:
+            return pd.to_numeric(df_band["weighted_local_sum"], errors="coerce")
 
         if {"contra_score", "ipsi_score"}.issubset(df_band.columns):
             contra_score = pd.to_numeric(df_band["contra_score"], errors="coerce")
             ipsi_score = pd.to_numeric(df_band["ipsi_score"], errors="coerce")
-        elif {"weighted_contra", "weighted_ipsi", "locality"}.issubset(df_band.columns):
+            return contra_score.add(ipsi_score, fill_value=0)
+
+        if {"weighted_contra", "weighted_ipsi", "locality"}.issubset(df_band.columns):
             locality = pd.to_numeric(df_band["locality"], errors="coerce").fillna(0)
             contra_score = pd.to_numeric(df_band["weighted_contra"], errors="coerce") * (1 + locality)
             ipsi_score = pd.to_numeric(df_band["weighted_ipsi"], errors="coerce") * (1 + locality)
-        else:
-            return None
+            return contra_score.add(ipsi_score, fill_value=0)
 
-        evals = pd.to_numeric(df_band["evals"], errors="coerce")
-        if self._selected_eigenscore_method() == "abs_diff":
-            eigscore = (evals - 0.5).abs()
-            eigscore_multiplier = 1 + eigscore
-        else:
-            clipped = evals.clip(lower=1e-10, upper=1 - 1e-10)
-            eigscore = np.log(clipped / (1 - clipped)).abs()
-            eigscore_multiplier = eigscore
+        return None
+
+    def _dipole_abs_eigen_score(self, df_band):
+        if "eigen_score_abs_diff" in df_band.columns:
+            return pd.to_numeric(df_band["eigen_score_abs_diff"], errors="coerce")
+
+        for column in ("evals", "eigenvalue"):
+            if column in df_band.columns:
+                evals = pd.to_numeric(df_band[column], errors="coerce")
+                return (evals - 0.5).abs()
+
+        return None
+
+    def _recompute_dipole_component_scores(self, df_band):
+        base_score = self._dipole_base_component_score(df_band)
+        eigen_abs_score = self._dipole_abs_eigen_score(df_band)
+        if base_score is None or eigen_abs_score is None:
+            return None
 
         eigengap = self._numeric_component_column(df_band, "eigengap", default=0.0)
         gof_coef = self._numeric_component_column(df_band, "gof_coef", default=0.0)
-        return (eigscore_multiplier * (contra_score + ipsi_score) * (1 + eigengap) * (1 + gof_coef)).to_numpy()
+        return (base_score * (1 + 2 * eigen_abs_score) * (1 + 2 * eigengap) * gof_coef).to_numpy()
 
     def _component_index_column(self, df):
         if "n_comp" in df.columns:
@@ -1217,13 +1238,19 @@ class MainWindow(QMainWindow):
     def _ensure_ranking_score(self, df):
         if df is None or df.empty:
             return df
-        if {"component_assessment_score", "brier score"}.issubset(df.columns):
+        brier_column = None
+        for column in ("brier score", "brier_score"):
+            if column in df.columns:
+                brier_column = column
+                break
+        if "component_assessment_score" in df.columns and brier_column is not None:
             df = df.copy()
-            penalty_l = float(getattr(self.settings, "brier_score_penalty_L", 5.0))
-            brier_score = pd.to_numeric(df["brier score"], errors="coerce")
+            brier_k = float(getattr(self.settings, "brier_score_exp_k", COMP_SET_SCORE_BRIER_K))
+            brier_score = pd.to_numeric(df[brier_column], errors="coerce")
+            mean_score = pd.to_numeric(df["component_assessment_score"], errors="coerce")
             df["ranking_score"] = (
-                pd.to_numeric(df["component_assessment_score"], errors="coerce")
-                * (1 + 1 / (1 + penalty_l * brier_score))
+                mean_score
+                * np.exp(brier_k * (0.20 - brier_score))
             )
         return df
 
@@ -1865,15 +1892,22 @@ class MainWindow(QMainWindow):
         if self._selected_component_assessment_algorithm() == "dipole":
             component_columns = [
                 "record",
+                "file",
                 "band",
                 "component",
+                "component_1based",
+                "n_comp",
                 "evals",
+                "eigenvalue",
+                "eigen_score_abs_diff",
                 "eigscore",
                 "eigengap",
+                "weighted_local_sum",
                 "contra_score",
                 "ipsi_score",
                 "gof",
                 "gof_coef",
+                "final_score_5",
                 "final_score",
             ]
         else:

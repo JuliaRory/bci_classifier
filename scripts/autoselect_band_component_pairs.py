@@ -23,11 +23,11 @@ COMPONENT_GROUP_TEMPLATES = [
 ]
 
 COMPONENT_SCORE_ALIASES = {
-    "final": ["final_score"],
+    "final": ["final_score_5", "final_score"],
     "contra": ["final_score_contra"],
     "ipsi": ["final_score_ipsi"],
 }
-BRIER_SCORE_PENALTY_L = float(getattr(Settings(), "brier_score_penalty_L", 5.0))
+BRIER_SCORE_EXP_K = float(getattr(Settings(), "brier_score_exp_k", 10.0))
 
 
 def parse_tuple(value):
@@ -134,9 +134,8 @@ def summarize_cv_scores(cv_scores_path, selected_pairs):
     )
     summary["components"] = summary["sel_comp"].apply(lambda value: list(parse_tuple(value)))
     brier_score = pd.to_numeric(summary["brier score"], errors="coerce")
-    summary["ranking_score"] = summary["component_assessment_score"] * (
-        1 + 1 / (1 + BRIER_SCORE_PENALTY_L * brier_score)
-    )
+    mean_score = pd.to_numeric(summary["component_assessment_score"], errors="coerce")
+    summary["ranking_score"] = mean_score * np.exp(BRIER_SCORE_EXP_K * (0.20 - brier_score))
 
     return summary.sort_values(
         ["ranking_score"],

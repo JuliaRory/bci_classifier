@@ -26,7 +26,7 @@ class CSPSettings:
 
     average_cov: bool = False 
     freq_bands: List[object] = field(default_factory=lambda: [(8, 12), (9, 13), (10, 14), (8, 15)])
-    component_assessment_algorithm: str = "legacy"
+    component_assessment_algorithm: str = "dipole"
     eigenscore_method: str = "logit"
 
 
@@ -48,6 +48,7 @@ class Settings:
     classifier_output_path_template: str = r"R:\projects_Agency_EBCI\Agency_EBCI\models\test_classifier.json" #r"models/{project}/{stage}/{session}/feat{components}_{band}_{record_stem}.json"
     classifier_spectral_freqs: str = "9, 10, 11, 19, 20, 21"
     brier_score_penalty_L: float = 5.0
+    brier_score_exp_k: float = 10.0
 
     CSP: CSPSettings = field(default_factory=CSPSettings)
     preprocess: PreprocessingSettings = field(default_factory=PreprocessingSettings)

@@ -54,10 +54,12 @@ DEFAULT_STAGE = "all"
 OUTPUT_NAME = "component_dipole_scores"
 
 
-def gof_coef(gof, low=0.2, high=0.7, min_coef=0.2):
+def gof_coef(gof, low=35, high=75, min_coef=0.2):
     """GOF-based coefficient for CSP one-dipole-likeness."""
     if not np.isfinite(gof):
         return 0.0
+    if gof <= 1.0 and high > 1.0:
+        gof *= 100.0
     if gof < low:
         return 0.0
     if gof >= high:
@@ -90,6 +92,7 @@ def score_matrix_components(df_matrix, spatial_patterns, eigvals, eigenscore_met
 
     eigscore = calculate_eigenscore(eigvals[selected], method=eigenscore_method)
     eigscore_multiplier = 1 + eigscore if eigenscore_method == "abs_diff" else eigscore
+    eigen_abs_score = np.abs(np.asarray(eigvals[selected], dtype=float) - 0.5)
     weighted_contra = calculate_weighted_score(selected_patterns, WEIGHTS_CONTRA)
     weighted_ipsi = calculate_weighted_score(selected_patterns, WEIGHTS_IPSI)
 
@@ -110,25 +113,28 @@ def score_matrix_components(df_matrix, spatial_patterns, eigvals, eigenscore_met
         row = df_matrix.loc[df_matrix["component"] == component].iloc[0]
         gof_percent = float(row["gof"]) if pd.notna(row["gof"]) else np.nan
         gof_norm = normalize_gof(gof_percent)
-        gof_score = gof_coef(gof_norm, low=0.2, high=0.7)
+        gof_score = gof_coef(gof_percent, low=35, high=75)
         gap = eigengap(eigvals, component)
 
         contra_score = float(weighted_contra[order] * (1 + locality[order]))
         ipsi_score = float(weighted_ipsi[order] * (1 + locality[order]))
+        weighted_local_sum = contra_score + ipsi_score
         final_score = float(
-            eigscore_multiplier[order]
-            * (contra_score + ipsi_score)
-            * (1 + gap)
-            * (1 + gof_score)
+            weighted_local_sum
+            * (1 + 2 * eigen_abs_score[order])
+            * (1 + 2 * gap)
+            * gof_score
         )
 
         additions.append(
             {
                 "component": int(component),
                 "eigscore": float(eigscore[order]),
+                "eigen_score_abs_diff": float(eigen_abs_score[order]),
                 "eigengap": float(gap),
                 "weighted_contra": float(weighted_contra[order]),
                 "weighted_ipsi": float(weighted_ipsi[order]),
+                "weighted_local_sum": float(weighted_local_sum),
                 "locality": float(locality[order]),
                 "contrast_contra": float(physio_contra["contrast"][order]),
                 "contrast_ipsi": float(physio_ipsi["contrast"][order]),
@@ -136,6 +142,7 @@ def score_matrix_components(df_matrix, spatial_patterns, eigvals, eigenscore_met
                 "ipsi_score": ipsi_score,
                 "gof_norm": float(gof_norm) if np.isfinite(gof_norm) else np.nan,
                 "gof_coef": float(gof_score),
+                "final_score_5": final_score,
                 "final_score": final_score,
             }
         )
@@ -268,6 +275,7 @@ def plot_assessed_matrix_components(
 
 
 def write_tables(df, output_root, basename=OUTPUT_NAME):
+    output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     csv_path = output_root / f"{basename}.csv"
     xlsx_path = output_root / f"{basename}.xlsx"

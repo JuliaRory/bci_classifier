@@ -49,7 +49,7 @@ class SettingsHandler:
 
     def update_component_assessment_algorithm(self):
         value = self.ui.combo_component_assessment.currentData()
-        self.settings.CSP.component_assessment_algorithm = value or "legacy"
+        self.settings.CSP.component_assessment_algorithm = value or "dipole"
 
     def update_eigenscore_method(self):
         value = self.ui.combo_eigenscore_method.currentData()

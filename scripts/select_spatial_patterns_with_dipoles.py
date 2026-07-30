@@ -75,7 +75,7 @@ DEFAULT_OUTPUT_FOLDER = "spatial_patterns_selection"
 DEFAULT_OUTPUT_ROOT = Path("results") / "algorihm_test"
 MONTAGE_PATH = PROJECT_ROOT / "resources" / "mks64_standard.ced"
 BAD_CHANNELS = ["FT9", "TP9", "T7", "AF7", "AF8", "FT10", "TP10", "T8"]
-BRIER_SCORE_PENALTY_L = 5.0
+BRIER_SCORE_EXP_K = 10.0
 TOP_COLUMN = "\u0442\u043e\u043f"
 
 
@@ -246,6 +246,7 @@ def score_matrix_components(
     selected_patterns = np.abs(spatial_patterns.T[selected, :])
     eigscore = calculate_eigenscore(eigvals[selected], method=eigenscore_method)
     eigscore_multiplier = 1 + eigscore if eigenscore_method == "abs_diff" else eigscore
+    eigen_abs_score = np.abs(eigvals[selected] - 0.5)
 
     weighted_contra = calculate_weighted_score(selected_patterns, WEIGHTS_CONTRA)
     weighted_ipsi = calculate_weighted_score(selected_patterns, WEIGHTS_IPSI)
@@ -271,10 +272,10 @@ def score_matrix_components(
         contra_score = float(weighted_contra[order] * (1 + locality))
         ipsi_score = float(weighted_ipsi[order] * (1 + locality))
         final_score = float(
-            eigscore_multiplier[order]
-            * (contra_score + ipsi_score)
-            * (1 + gap)
-            * (1 + gof_score)
+            (contra_score + ipsi_score)
+            * (1 + 2 * eigen_abs_score[order])
+            * (1 + 2 * gap)
+            * gof_score
         )
 
         row = {
@@ -292,6 +293,7 @@ def score_matrix_components(
             "eigenvalue": float(eigvals[component]),
             "eigscore_method": eigenscore_method,
             "eigscore": float(eigscore[order]),
+            "eigen_score_abs_diff": float(eigen_abs_score[order]),
             "eigscore_multiplier": float(eigscore_multiplier[order]),
             "eigengap": float(gap),
             "weighted_contra": float(weighted_contra[order]),
@@ -303,6 +305,7 @@ def score_matrix_components(
             "ipsi_score": ipsi_score,
             "gof_norm": float(gof_norm) if np.isfinite(gof_norm) else np.nan,
             "gof_coef": float(gof_score),
+            "final_score_5": final_score,
             "final_score": final_score,
         }
         row.update(fit_row)
@@ -526,8 +529,7 @@ def evaluate_component_sets(
             balanced_accuracy = float(balanced_accuracy_score(labels_test, y_pred_test))
             ranking_score = float(
                 component_score_mean
-                * (1 + balanced_accuracy)
-                * (1 + 1 / (1 + BRIER_SCORE_PENALTY_L * brier))
+                * np.exp(BRIER_SCORE_EXP_K * (0.20 - brier))
             )
             relative_components = [
                 int(component_relative_label(component, n_components)) for component in components

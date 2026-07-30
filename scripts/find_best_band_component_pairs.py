@@ -28,7 +28,8 @@ BAD_CHANNELS = ["FT9", "TP9", "T7", "AF7", "AF8", "FT10", "TP10", "T8"]
 MONTAGE_PATH = r"resources/mks64_standard.ced"
 CSP_COLORMAP = "jet"
 DEFAULT_OUTPUT_FOLDER = "best_band_component_pairs"
-BRIER_SCORE_PENALTY_L = float(getattr(Settings(), "brier_score_penalty_L", 5.0))
+PREFERRED_COMPONENT_SCORE_COLUMN = "final_score_5"
+BRIER_SCORE_EXP_K = float(getattr(Settings(), "brier_score_exp_k", 10.0))
 SUMMARY_COLUMNS = [
     "session",
     "record",
@@ -114,14 +115,25 @@ def read_component_tables(folder_csp, record_stem):
 
 def component_scores_by_band(df_components):
     scores_by_band = {}
-    required_columns = {"band", "final_score_contra", "final_score_ipsi"}
-    if df_components.empty or not required_columns.issubset(df_components.columns):
+    if df_components.empty or "band" not in df_components.columns:
         return scores_by_band
 
     for band, df_band in df_components.groupby("band", sort=False):
-        contra_score = pd.to_numeric(df_band["final_score_contra"], errors="coerce")
-        ipsi_score = pd.to_numeric(df_band["final_score_ipsi"], errors="coerce")
-        component_scores = contra_score.add(ipsi_score, fill_value=0).to_numpy()
+        if PREFERRED_COMPONENT_SCORE_COLUMN in df_band.columns:
+            component_scores = pd.to_numeric(df_band[PREFERRED_COMPONENT_SCORE_COLUMN], errors="coerce").to_numpy()
+            contra_score = pd.Series(np.nan, index=df_band.index, dtype=float)
+            ipsi_score = pd.Series(np.nan, index=df_band.index, dtype=float)
+        elif {"final_score_contra", "final_score_ipsi"}.issubset(df_band.columns):
+            contra_score = pd.to_numeric(df_band["final_score_contra"], errors="coerce")
+            ipsi_score = pd.to_numeric(df_band["final_score_ipsi"], errors="coerce")
+            component_scores = contra_score.add(ipsi_score, fill_value=0).to_numpy()
+        elif "final_score" in df_band.columns:
+            component_scores = pd.to_numeric(df_band["final_score"], errors="coerce").to_numpy()
+            contra_score = pd.Series(np.nan, index=df_band.index, dtype=float)
+            ipsi_score = pd.Series(np.nan, index=df_band.index, dtype=float)
+        else:
+            continue
+
         band_scores = {
             "component": component_scores,
             "contra": contra_score.to_numpy(),
@@ -180,9 +192,8 @@ def prepare_pair_scores(cv_scores_path, df_components):
 
     df_cv["components"] = df_cv["sel_comp"].apply(parse_components)
     brier_score = pd.to_numeric(df_cv["brier score"], errors="coerce")
-    df_cv["ranking_score"] = df_cv["component_assessment_score"] * (
-        1 + 1 / (1 + BRIER_SCORE_PENALTY_L * brier_score)
-    )
+    mean_score = pd.to_numeric(df_cv["component_assessment_score"], errors="coerce")
+    df_cv["ranking_score"] = mean_score * np.exp(BRIER_SCORE_EXP_K * (0.20 - brier_score))
     return df_cv.sort_values(["ranking_score"], ascending=[False], ignore_index=True)
 
 
