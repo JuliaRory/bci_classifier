@@ -1,0 +1,3 @@
+﻿project,stage,subject,record,epoch_path,matrices_count,matrices_calculated
+pr_Agency_EBCI,test,06_02 Artem,rec_05AY_calibration_20260602_133912,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\06_02 Artem\EPOCHS_rec_05AY_calibration_20260602_133912.hdf,4,False
+pr_Agency_EBCI,test,06_02 Artem,rec_05AY_calibration_20260602_144111,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\06_02 Artem\EPOCHS_rec_05AY_calibration_20260602_144111.hdf,4,False

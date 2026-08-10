@@ -1,0 +1,4 @@
+﻿project,stage,subject,record,epoch_path,matrices_count,matrices_calculated
+pr_Agency_EBCI,test,05_15 Arina,01_calib_MI,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\05_15 Arina\EPOCHS_01_calib_MI.hdf,4,False
+pr_Agency_EBCI,test,05_15 Arina,02_calib_MI,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\05_15 Arina\EPOCHS_02_calib_MI.hdf,4,False
+pr_Agency_EBCI,test,05_15 Arina,03_calib_MI,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\05_15 Arina\EPOCHS_03_calib_MI.hdf,4,False

@@ -229,11 +229,16 @@ class EpochReviewDialog(QDialog):
 class MainWindow(QMainWindow):
     """Главное окно приложения"""
     
-    def __init__(self):
+    def __init__(self, raw_data_folder=None):
         super().__init__()
 
         # Инициализация обработчика настроек
         self.settings = Settings()
+        self.raw_data_folder = str(raw_data_folder) if raw_data_folder else None
+        if self.raw_data_folder is not None:
+            self.settings.project = "pr_Agency_EBCI"
+            self.settings.stage = "exp"
+            self.settings.session = Path(self.raw_data_folder).name
         
         
         # Переменные для хранения текущих данных
@@ -567,9 +572,14 @@ class MainWindow(QMainWindow):
             return True
         return False
 
+    def _data_path(self, *parts):
+        return os.path.join(self.settings.folder_data, *parts)
+
     def _populate_sessions_combo(self, project):
         self.session_combo.clear()
         sessions = self._available_sessions(project, self.settings.stage)
+        if self.raw_data_folder is not None:
+            sessions = sorted(set(sessions) | {self.settings.session})
         if not sessions:
             self.session_combo.addItem("-- Выберите папку --")
             return
@@ -578,9 +588,9 @@ class MainWindow(QMainWindow):
 
     def _available_sessions(self, project, stage):
         candidate_roots = [
-            os.path.join(r"data", project, "raw", stage),
-            os.path.join(r"data", project, "trans", stage),
-            os.path.join(r"data", project, "features", "csp", stage),
+            self._data_path(project, "raw", stage),
+            self._data_path(project, "trans", stage),
+            self._data_path(project, "features", "csp", stage),
             os.path.join(r"results", project, stage),
         ]
         sessions = set()
@@ -603,11 +613,18 @@ class MainWindow(QMainWindow):
         self.session_combo.blockSignals(True)
 
         self.update_folder(self.settings.folder_data, self.project_combo)
+        if self.raw_data_folder is not None and self.project_combo.findText(configured_project) < 0:
+            self.project_combo.addItem(configured_project)
         self._set_combo_text_if_present(self.project_combo, configured_project)
         selected_project = self.project_combo.currentText()
         self._set_combo_text_if_present(self.stage_combo, configured_stage)
         self._populate_sessions_combo(selected_project)
         self._set_combo_text_if_present(self.session_combo, configured_session)
+
+        if self.raw_data_folder is not None:
+            self.project_combo.setEnabled(False)
+            self.stage_combo.setEnabled(False)
+            self.session_combo.setEnabled(False)
 
         self.settings.project = self.project_combo.currentText()
         self.settings.stage = self.stage_combo.currentText()
@@ -640,16 +657,17 @@ class MainWindow(QMainWindow):
         self.pair_scores_table.clearSelection()
         print("FOLDER SELECTED", session)
 
-        self._current_folder = os.path.join(
-            r"data",
-            self.settings.project,
-            "raw",
-            self.settings.stage,
-            session,
-        )
+        if self.raw_data_folder is not None:
+            self._current_folder = self.raw_data_folder
+        else:
+            self._current_folder = self._data_path(
+                self.settings.project,
+                "raw",
+                self.settings.stage,
+                session,
+            )
 
-        self._current_dataset_folder = os.path.join(
-            r"data",
+        self._current_dataset_folder = self._data_path(
             self.settings.project,
             "trans",
             self.settings.stage,
@@ -672,7 +690,7 @@ class MainWindow(QMainWindow):
 
     def _folder_csp(self):
         s = self.settings
-        return os.path.join(r"data", s.project, "features", "csp", s.stage, s.session)
+        return self._data_path(s.project, "features", "csp", s.stage, s.session)
 
     def _folder_csp_plots(self):
         s = self.settings
@@ -2527,7 +2545,7 @@ class MainWindow(QMainWindow):
         config = self._build_preprocess_config()
 
         s = self.settings
-        folder_datasets = os.path.join(r"data", s.project, "trans", s.stage, s.session)
+        folder_datasets = self._data_path(s.project, "trans", s.stage, s.session)
         print(folder_datasets)
         os.makedirs(folder_datasets, exist_ok=True)
         process_records(self._current_folder, self._current_records, folder_datasets, config)
@@ -2572,7 +2590,7 @@ class MainWindow(QMainWindow):
 
         s = self.settings
         folder_input = self._current_dataset_folder
-        folder_output = os.path.join(r"data", s.project, "features", "csp", s.stage, s.session)
+        folder_output = self._data_path(s.project, "features", "csp", s.stage, s.session)
         os.makedirs(folder_output, exist_ok=True)
 
         try:

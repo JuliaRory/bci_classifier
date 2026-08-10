@@ -1,0 +1,14 @@
+﻿project,stage,subject,record,epoch_path,matrices_count,matrices_calculated
+pr_Agency_EBCI,test,03_23 Artem,01_calib,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\03_23 Artem\EPOCHS_01_calib.hdf,4,False
+pr_Agency_EBCI,test,03_30 Artem,01_calib,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\03_30 Artem\EPOCHS_01_calib.hdf,4,False
+pr_Agency_EBCI,test,03_30 Artem,04_calib_rest,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\03_30 Artem\EPOCHS_04_calib_rest.hdf,4,False
+pr_Agency_EBCI,test,04_03 Artem,01_calib,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\04_03 Artem\EPOCHS_01_calib.hdf,4,False
+pr_Agency_EBCI,test,04_03 Artem,04_calib,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\04_03 Artem\EPOCHS_04_calib.hdf,4,False
+pr_Agency_EBCI,test,05_08 Artem,01_calib,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\05_08 Artem\EPOCHS_01_calib.hdf,4,False
+pr_Agency_EBCI,test,05_08 Artem,02_calib,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\05_08 Artem\EPOCHS_02_calib.hdf,4,False
+pr_Agency_EBCI,test,05_15 Arina,01_calib_MI,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\05_15 Arina\EPOCHS_01_calib_MI.hdf,4,False
+pr_Agency_EBCI,test,05_15 Arina,02_calib_MI,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\05_15 Arina\EPOCHS_02_calib_MI.hdf,4,False
+pr_Agency_EBCI,test,05_15 Arina,03_calib_MI,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\05_15 Arina\EPOCHS_03_calib_MI.hdf,4,False
+pr_Agency_EBCI,test,05_19 Darisy,01_calib,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\05_19 Darisy\EPOCHS_01_calib.hdf,4,False
+pr_Agency_EBCI,test,06_02 Artem,rec_05AY_calibration_20260602_133912,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\06_02 Artem\EPOCHS_rec_05AY_calibration_20260602_133912.hdf,4,False
+pr_Agency_EBCI,test,06_02 Artem,rec_05AY_calibration_20260602_144111,C:\Users\hodor\Documents\lab-Shishkin\projects\BCI_classifier\data\pr_Agency_EBCI\trans\test\06_02 Artem\EPOCHS_rec_05AY_calibration_20260602_144111.hdf,4,False
