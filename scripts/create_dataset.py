@@ -24,6 +24,14 @@ def process_record(full_path, folder_output, config):
         eeg, _ = bandpass_filter(eeg, config["Fs"], low=config["low_freq"], high=config["high_freq"])
     
     idxs1, idxs2 = get_idxs(config["idxs_keys"], idxs_1, idxs_2, idxs_3)
+    if len(idxs1) == 0 or len(idxs2) == 0:
+        counts = (len(idxs_1), len(idxs_2), len(idxs_3))
+        raise ValueError(
+            f"Cannot create dataset from {Path(full_path).name}: "
+            f"selected classes {config['idxs_keys']} must both contain events; "
+            f"detected event counts are 1={counts[0]}, 2={counts[1]}, 3={counts[2]}."
+        )
+
     if config["epoch_len_ms"] is None:  # get full epoch
         trial_dur = ms_to_samples(config["trial_dur_ms"])
         epochs_1 = get_full_epochs(eeg, idxs1, trial_dur=trial_dur+baseline)

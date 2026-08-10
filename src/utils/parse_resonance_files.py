@@ -35,9 +35,23 @@ def process_file_resonance(filename, baseline=100, end_shift = 0, show_plot=Fals
     data, _ = load_h5df(filename)
     raw_eeg = data[:, EEG_CHANNELS] * 1E6 # uV
 
-    trigger = reverse_trigger(ttl2binary(data[:, -1], bit_index=0))
-
-    idxs_rest, idxs_right, idxs_left = parse_events(trigger, baseline=baseline)
+    # Different recorder/firmware versions put the photomarker into different
+    # TTL bits (for example 65535/65534 uses bit 0, while 65535/65503 uses
+    # bit 5). Pick the bit that produces the largest number of valid trials.
+    trigger_candidates = [
+        reverse_trigger(ttl2binary(data[:, -1], bit_index=bit_index))
+        for bit_index in range(8)
+    ]
+    parsed_candidates = [
+        parse_events(trigger_candidate, baseline=baseline)
+        for trigger_candidate in trigger_candidates
+    ]
+    best_bit = max(
+        range(len(parsed_candidates)),
+        key=lambda bit_index: sum(len(intervals) for intervals in parsed_candidates[bit_index]),
+    )
+    trigger = trigger_candidates[best_bit]
+    idxs_rest, idxs_right, idxs_left = parsed_candidates[best_bit]
 
     if show_plot:
         fig = plot_events(trigger, idxs_rest, idxs_right, idxs_left)
